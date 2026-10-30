@@ -16,7 +16,7 @@ if command -v cargo >/dev/null 2>&1; then
 elif command -v mise >/dev/null 2>&1; then
   mise exec -- cargo build --release
 else
-  echo "cargo wurde nicht gefunden (weder direkt noch über mise)." >&2
+  echo "cargo was not found (neither directly nor via mise)." >&2
   exit 1
 fi
 
@@ -38,10 +38,10 @@ sed "s|^Exec=.*|Exec=$BIN_DIR/gitbro|" assets/gitbro.desktop > "$DATA_DIR/applic
 gtk-update-icon-cache -f -t "$DATA_DIR/icons/hicolor" >/dev/null 2>&1 || true
 update-desktop-database "$DATA_DIR/applications" >/dev/null 2>&1 || true
 
-echo "GitBro installiert:"
-echo "  Programm  $BIN_DIR/gitbro"
-echo "  Starter   $DATA_DIR/applications/gitbro.desktop"
+echo "GitBro installed:"
+echo "  Binary    $BIN_DIR/gitbro"
+echo "  Launcher  $DATA_DIR/applications/gitbro.desktop"
 case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
-  *) echo "Hinweis: $BIN_DIR liegt nicht im PATH." ;;
+  *) echo "Note: $BIN_DIR is not in your PATH." ;;
 esac

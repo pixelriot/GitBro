@@ -25,23 +25,21 @@ It is deliberately opinionated. Git has a lot of ceremony; GitBro folds the ever
 
 No staging area to manage, no separate push step.
 
-> **Note:** the user interface is currently in German. Translations are welcome.
-
 ## Features
 
 - **The whole picture** — a graph of every branch, remote branch, tag and stash, with ahead/behind counts. Uncommitted changes show up as a **WIP** row at the top.
 - **One-step commit** — everything that changed (new files included) is committed and pushed right away. The first push of a new branch sets the upstream automatically. Repositories without a remote simply commit.
-- **Amend** — tick _Letzten Commit ändern_ and the last message is pre-filled. If that commit is already on the remote, the button turns yellow and says so: the push then uses `--force-with-lease`, so it never overwrites work someone else pushed.
+- **Amend** — tick _Amend last commit_ and the last message is pre-filled. If that commit is already on the remote, the button turns yellow and says so: the push then uses `--force-with-lease`, so it never overwrites work someone else pushed.
 - **Discard everything** — one button, always with a confirmation. Resets tracked files, removes untracked ones, and ends an unfinished merge. Ignored files are left alone.
 - **Stash** — stash including untracked files with an optional name; apply, pop or drop from the sidebar.
 - **Branches** — create one from the ⋯ menu of the current branch, double-click to check out, merge or delete from the ⋯ menu. Deleting tells you how many commits exist _only_ on that branch before it throws them away.
 - **Safe Pull** — fetches everything, prunes, and fast-forwards. It never creates a surprise merge commit or conflict; if histories diverged it tells you instead.
-- **Full-screen diff** — changed-files list, line numbers, binary detection, and _Neuer_/_Älter_ to walk through history.
+- **Full-screen diff** — changed-files list, line numbers, binary detection, and _Newer_/_Older_ to walk through history.
 - **Handy details** — recent repositories (`Ctrl+R`), the last repo opens automatically, a plain folder can be turned into a repository with one click (default branch `main`), and the view refreshes when the window regains focus.
 
 | Commit & push in one step | Amend the last commit |
 | --- | --- |
-| ![Commit message typed, changed files listed, "Committen & Pushen" button](docs/screenshots/commit-and-push.png) | ![Amend with the previous message pre-filled](docs/screenshots/amend.png) |
+| ![Commit message typed, changed files listed, "Commit & Push" button](docs/screenshots/commit-and-push.png) | ![Amend with the previous message pre-filled](docs/screenshots/amend.png) |
 
 | Browse a commit | New branch |
 | --- | --- |

@@ -117,7 +117,7 @@ struct GitBro {
 
 impl GitBro {
     fn new(start: Option<PathBuf>, cx: &mut Context<Self>) -> Self {
-        let commit_input = cx.new(|cx| TextInput::new(cx, "Commit-Nachricht (erste Zeile ist der Titel)", (4, 4)));
+        let commit_input = cx.new(|cx| TextInput::new(cx, "Commit message (first line is the title)", (4, 4)));
         // The commit button follows what is typed.
         cx.observe(&commit_input, |_, _, cx| cx.notify()).detach();
         let this = Self {
@@ -306,7 +306,7 @@ impl GitBro {
                 }
                 let ok = result.is_ok();
                 this.set_status(match result {
-                    Ok(out) if out.is_empty() => Status::Done("Fertig".into()),
+                    Ok(out) if out.is_empty() => Status::Done("Done".into()),
                     Ok(out) => Status::Done(out),
                     Err(err) => Status::Failed(format!("{err:#}")),
                 });
@@ -324,11 +324,11 @@ impl GitBro {
         }
         let message = self.commit_input.read(cx).text().trim().to_owned();
         if message.is_empty() {
-            return self.fail("Die Commit-Nachricht ist leer.", cx);
+            return self.fail("The commit message is empty.", cx);
         }
         let amend = self.amend;
         self.run_then(
-            if amend { "Ändere letzten Commit…" } else { "Committe…" },
+            if amend { "Amending last commit…" } else { "Committing…" },
             cx,
             move |p| git::commit(p, &message, amend),
             move |this, ok, cx| {
@@ -339,8 +339,8 @@ impl GitBro {
                 this.amend = false;
                 this.amend_prefill = None;
                 // A rewritten commit that is already on the remote can only be replaced there.
-                this.run("Pushe…", cx, move |p| {
-                    git::push(p, amend).context("Der Commit ist angelegt, aber der Push ist fehlgeschlagen")
+                this.run("Pushing…", cx, move |p| {
+                    git::push(p, amend).context("The commit was created, but the push failed")
                 });
             },
         );
@@ -387,7 +387,7 @@ impl GitBro {
 
     fn open_dialog(&mut self, kind: DialogKind, window: &mut Window, cx: &mut Context<Self>) {
         let field = match &kind {
-            DialogKind::NewBranch { .. } => Some("Name des Branches"),
+            DialogKind::NewBranch { .. } => Some("Branch name"),
             DialogKind::Stash => Some("Name (optional)"),
             DialogKind::Discard { .. } | DialogKind::DeleteBranch { .. } | DialogKind::DropStash { .. } => None,
         };
@@ -429,24 +429,24 @@ impl GitBro {
         self.close_dialog(window, cx);
         match kind {
             DialogKind::NewBranch { .. } => {
-                self.run("Lege Branch an…", cx, move |p| git::create_branch(p, &name));
+                self.run("Creating branch…", cx, move |p| git::create_branch(p, &name));
             }
             DialogKind::Discard { .. } => {
-                self.run("Verwerfe Änderungen…", cx, |p| git::discard_all(p));
+                self.run("Discarding changes…", cx, |p| git::discard_all(p));
             }
             DialogKind::Stash => {
-                self.run("Stashe Änderungen…", cx, move |p| git::stash_push(p, &text));
+                self.run("Stashing changes…", cx, move |p| git::stash_push(p, &text));
             }
             DialogKind::DeleteBranch { name, .. } => {
-                self.run("Lösche Branch…", cx, move |p| git::delete_branch(p, &name));
+                self.run("Deleting branch…", cx, move |p| git::delete_branch(p, &name));
             }
             DialogKind::DropStash { index, .. } => {
-                self.run("Lösche Stash…", cx, move |p| git::stash_drop(p, index));
+                self.run("Deleting stash…", cx, move |p| git::stash_drop(p, index));
             }
         }
     }
 
-    /// "Neuer Branch…" in the ⋯ menu of the current branch: the new one starts right here.
+    /// "New branch…" in the ⋯ menu of the current branch: the new one starts right here.
     fn ask_new_branch(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(from) = self.head_name().map(str::to_owned) else { return };
         self.open_dialog(DialogKind::NewBranch { from }, window, cx);
@@ -475,7 +475,7 @@ impl GitBro {
             files: false,
             directories: true,
             multiple: false,
-            prompt: Some("Repository öffnen".into()),
+            prompt: Some("Open repository".into()),
         });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = paths.await else { return };
@@ -491,7 +491,7 @@ impl GitBro {
         self.detail = None;
         self.recent_open = false;
         self.menu = None;
-        self.set_status(Status::Busy("Lade Repository…".into()));
+        self.set_status(Status::Busy("Loading repository…".into()));
         self.reload(path, cx);
         cx.notify();
     }
@@ -563,7 +563,7 @@ impl GitBro {
         if self.busy() {
             return;
         }
-        self.set_status(Status::Busy("Lege Git-Repository an…".into()));
+        self.set_status(Status::Busy("Creating Git repository…".into()));
         cx.notify();
         cx.spawn(async move |this, cx| {
             let (created, loaded) = cx
@@ -574,7 +574,7 @@ impl GitBro {
                 match (created, loaded) {
                     (Ok(_), Ok(snapshot)) => {
                         this.set_snapshot(snapshot);
-                        this.set_status(Status::Done("Git-Repository angelegt.".into()));
+                        this.set_status(Status::Done("Git repository created.".into()));
                     }
                     (Err(err), _) | (_, Err(err)) => {
                         this.set_status(Status::Failed(format!("{err:#}")));
@@ -818,7 +818,7 @@ impl GitBro {
             .map(|s| &s.path)
             .or(self.no_repo.as_ref())
             .and_then(|p| p.file_name())
-            .map_or("Repository öffnen".to_owned(), |n| n.to_string_lossy().into_owned());
+            .map_or("Open repository".to_owned(), |n| n.to_string_lossy().into_owned());
         let branch = self.head_name().map(str::to_owned);
         let (ahead, behind) = self
             .snapshot
@@ -869,13 +869,13 @@ impl GitBro {
                         .mr_2()
                         .text_color(rgb(t.yellow))
                         .child(icon(Icon::Warning, 14., t.yellow))
-                        .child("Merge unterbrochen"),
+                        .child("Merge interrupted"),
                 )
-                .child(activate(tool_button(t, "abort", Icon::X, "Abbrechen"),
+                .child(activate(tool_button(t, "abort", Icon::X, "Abort"),
                     !busy,
                     t.border,
                     cx.listener(|this, _, _, cx| {
-                        this.run("Breche Merge ab…", cx, |p| git::abort_merge(p))
+                        this.run("Aborting merge…", cx, |p| git::abort_merge(p))
                     }),
                 ))
             })
@@ -908,7 +908,7 @@ impl GitBro {
             .pb_2();
 
         if let Some(snapshot) = &self.snapshot {
-            list = list.child(section_title(t, Icon::Branch, "Lokal", snapshot.local.len()));
+            list = list.child(section_title(t, Icon::Branch, "Local", snapshot.local.len()));
             for b in &snapshot.local {
                 list = list.child(self.branch_item(b, false, cx));
             }
@@ -956,8 +956,8 @@ impl GitBro {
                 .child(self.file_list(d, view, cx))
                 .children(d.wip.then(|| self.commit_panel(d, cx)))
                 .into_any_element(),
-            DetailData::Loading => centered(t, "Lade…"),
-            DetailData::Failed(_) => centered(t, "Fehler beim Laden"),
+            DetailData::Loading => centered(t, "Loading…"),
+            DetailData::Failed(_) => centered(t, "Failed to load"),
         };
         div()
             .flex()
@@ -979,7 +979,7 @@ impl GitBro {
                         t,
                         "back",
                         Icon::ArrowLeft,
-                        "Verlauf",
+                        "History",
                         true,
                         t.accent,
                         cx.listener(|this, _, window, cx| this.close_detail(window, cx)),
@@ -1134,7 +1134,7 @@ impl GitBro {
                 t,
                 "menu-new-branch",
                 Icon::Branch,
-                "Neuer Branch…",
+                "New branch…",
                 !busy,
                 cx.listener(|this, _, window, cx| {
                     this.menu = None;
@@ -1146,7 +1146,7 @@ impl GitBro {
             t,
             "menu-checkout",
             Icon::Checkout,
-            "Auschecken",
+            "Check out",
             !busy,
             cx.listener(move |this, _, _, cx| {
                 this.menu = None;
@@ -1160,7 +1160,7 @@ impl GitBro {
                 t,
                 "menu-merge",
                 Icon::Merge,
-                format!("In {head} mergen"),
+                format!("Merge into {head}"),
                 !busy,
                 cx.listener(move |this, _, _, cx| {
                     this.menu = None;
@@ -1176,7 +1176,7 @@ impl GitBro {
                 t,
                 "menu-delete",
                 Icon::Trash,
-                "Löschen…",
+                "Delete…",
                 !busy,
                 cx.listener(move |this, _, window, cx| {
                     this.menu = None;
@@ -1197,11 +1197,11 @@ impl GitBro {
                     t,
                     "stash-apply",
                     Icon::Unstash,
-                    "Anwenden",
+                    "Apply",
                     !busy,
                     cx.listener(move |this, _, _, cx| {
                         this.menu = None;
-                        this.run("Wende Stash an…", cx, move |p| git::stash_apply(p, index));
+                        this.run("Applying stash…", cx, move |p| git::stash_apply(p, index));
                         cx.notify();
                     }),
                 ))
@@ -1209,11 +1209,11 @@ impl GitBro {
                     t,
                     "stash-pop",
                     Icon::Unstash,
-                    "Entnehmen",
+                    "Pop",
                     !busy,
                     cx.listener(move |this, _, _, cx| {
                         this.menu = None;
-                        this.run("Wende Stash an…", cx, move |p| git::stash_pop(p, index));
+                        this.run("Applying stash…", cx, move |p| git::stash_pop(p, index));
                         cx.notify();
                     }),
                 ))
@@ -1222,7 +1222,7 @@ impl GitBro {
                     t,
                     "stash-drop",
                     Icon::Trash,
-                    "Löschen…",
+                    "Delete…",
                     !busy,
                     cx.listener(move |this, _, window, cx| {
                         let kind = DialogKind::DropStash { index, message: message.clone() };
@@ -1303,7 +1303,7 @@ impl GitBro {
             .flex_1()
             .min_w_0()
             .child(if count == 0 {
-                centered(t, "Noch keine Commits.")
+                centered(t, "No commits yet.")
             } else {
                 list.into_any_element()
             })
@@ -1315,7 +1315,7 @@ impl GitBro {
                         .py_1()
                         .text_xs()
                         .text_color(rgb(t.subtext))
-                        .child(format!("Nur die neuesten {} Commits werden angezeigt.", git::MAX_COMMITS)),
+                        .child(format!("Showing only the newest {} commits.", git::MAX_COMMITS)),
                 )
             })
             .into_any_element()
@@ -1344,10 +1344,10 @@ impl GitBro {
             .child(
                 div()
                     .text_color(rgb(t.subtext))
-                    .child("Dieser Ordner ist noch kein Git-Repository."),
+                    .child("This folder is not a Git repository yet."),
             )
             .child(activate(
-                tool_button(t, "init", Icon::Branch, "Git Repository anlegen")
+                tool_button(t, "init", Icon::Branch, "Create Git repository")
                     .h(px(32.))
                     .px_3()
                     .border_1()
@@ -1358,7 +1358,7 @@ impl GitBro {
                 cx.listener(move |this, _, _, cx| this.init_repo(dir.clone(), cx)),
             ))
             .child(activate(
-                tool_button(t, "init-other", Icon::Folder, "Anderes Repository öffnen"),
+                tool_button(t, "init-other", Icon::Folder, "Open another repository"),
                 true,
                 t.border,
                 cx.listener(|this, _, _, cx| this.open_repo(cx)),
@@ -1381,9 +1381,9 @@ impl GitBro {
             .child(
                 div()
                     .text_color(rgb(t.subtext))
-                    .child("Öffne ein Repository, um den Verlauf zu sehen."),
+                    .child("Open a repository to see its history."),
             )
-            .child(activate(tool_button(t, "open-big", Icon::Folder, "Repository öffnen")
+            .child(activate(tool_button(t, "open-big", Icon::Folder, "Open repository")
                     .h(px(32.))
                     .px_3()
                     .border_1()
@@ -1408,7 +1408,7 @@ impl GitBro {
                                 .py_1()
                                 .text_xs()
                                 .text_color(rgb(t.subtext))
-                                .child("ZULETZT GEÖFFNET"),
+                                .child("RECENT"),
                         )
                         .children(self.recent_items(cx)),
                 )
@@ -1440,19 +1440,19 @@ impl GitBro {
             .border_b_1()
             .border_color(rgb(t.border))
             .child(div().flex_1().min_w_0().truncate().font_weight(gpui::FontWeight::BOLD).child(title))
-            .child(activate(tool_button(t, "newer", Icon::ChevronUp, "Neuer"),
+            .child(activate(tool_button(t, "newer", Icon::ChevronUp, "Newer"),
                 ix.is_some_and(|i| i > 0),
                 t.border,
                 cx.listener(|this, _, _, cx| this.open_adjacent(-1, cx)),
             ))
-            .child(activate(tool_button(t, "older", Icon::ChevronDown, "Älter"),
+            .child(activate(tool_button(t, "older", Icon::ChevronDown, "Older"),
                 ix.is_some_and(|i| i + 1 < len),
                 t.border,
                 cx.listener(|this, _, _, cx| this.open_adjacent(1, cx)),
             ));
 
         let body = match &view.data {
-            DetailData::Loading => centered(t, "Lade Commit…"),
+            DetailData::Loading => centered(t, "Loading commit…"),
             DetailData::Failed(err) => div()
                 .p_3()
                 .text_color(rgb(t.red))
@@ -1496,7 +1496,7 @@ impl GitBro {
                         t,
                         "recent-open",
                         Icon::Plus,
-                        "Anderes Repository öffnen…",
+                        "Open another repository…",
                         true,
                         cx.listener(|this, _, _, cx| {
                             this.recent_open = false;
@@ -1557,7 +1557,7 @@ impl GitBro {
         let t = self.theme;
         let full = d.id.clone();
         let parents = if d.parents.is_empty() {
-            "Root-Commit".to_owned()
+            "Root commit".to_owned()
         } else {
             format!("Parent: {}", d.parents.join(", "))
         };
@@ -1597,7 +1597,7 @@ impl GitBro {
                             .hover(move |s| s.bg(rgb(t.border)))
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(full.clone()));
-                                this.set_status(Status::Done("Hash kopiert".into()));
+                                this.set_status(Status::Done("Hash copied".into()));
                                 cx.notify();
                             }))
                             .child(d.id[..10].to_owned())
@@ -1625,11 +1625,11 @@ impl GitBro {
         let t = self.theme;
         let shown = d.files.len();
         let header = if d.files_total > shown {
-            format!("{shown} von {} Dateien", d.files_total)
+            format!("{shown} of {} files", d.files_total)
         } else if d.files_total == 1 {
-            "1 Datei".to_owned()
+            "1 file".to_owned()
         } else {
-            format!("{} Dateien", d.files_total)
+            format!("{} files", d.files_total)
         };
         let list = uniform_list(
             "files",
@@ -1694,7 +1694,7 @@ impl GitBro {
         let t = self.theme;
         let pane = div().flex().flex_col().flex_1().min_w_0().min_h_0();
         let Some(file) = d.files.get(view.file) else {
-            return pane.child(centered(t, "Keine Dateien geändert"));
+            return pane.child(centered(t, "No files changed"));
         };
 
         let header = div()
@@ -1712,9 +1712,9 @@ impl GitBro {
             .child(div().text_color(rgb(t.red)).child(format!("−{}", file.removed)));
 
         let content = if file.binary {
-            centered(t, "Binärdatei")
+            centered(t, "Binary file")
         } else if file.lines.is_empty() {
-            centered(t, "Keine Textänderungen")
+            centered(t, "No text changes")
         } else {
             let list = uniform_list(
                 ("diff", view.file),
@@ -1756,14 +1756,14 @@ impl GitBro {
         let rewrites_remote = self.amend && has_remote && head.is_some_and(|b| b.upstream && b.ahead == 0);
         let has_message = !self.commit_input.read(cx).text().trim().is_empty();
         let info = match d.files_total {
-            1 => "1 Datei geändert".to_owned(),
-            n => format!("{n} Dateien geändert"),
+            1 => "1 file changed".to_owned(),
+            n => format!("{n} files changed"),
         };
         let label = match (self.amend, has_remote, rewrites_remote) {
-            (false, false, _) => "Committen",
-            (false, true, _) => "Committen & Pushen",
+            (false, false, _) => "Commit",
+            (false, true, _) => "Commit & Push",
             (true, false, _) => "Amend",
-            (true, true, false) => "Amend & Pushen",
+            (true, true, false) => "Amend & Push",
             (true, true, true) => "Amend & Force-Push",
         };
         let amend_on = self.amend;
@@ -1796,7 +1796,7 @@ impl GitBro {
                                 .border_color(rgb(if amend_on { t.accent } else { t.subtext }))
                                 .children(amend_on.then(|| div().size(px(8.)).bg(rgb(t.accent)))),
                         )
-                        .child("Letzten Commit ändern (Amend)"),
+                        .child("Amend last commit"),
                 )
             })
             .child(
@@ -1816,14 +1816,14 @@ impl GitBro {
                     .text_xs()
                     .text_color(rgb(t.subtext))
                     .child(div().flex_1().child(info))
-                    .child("Strg+Enter"),
+                    .child("Ctrl+Enter"),
             )
             .when(rewrites_remote, |d| {
                 d.child(
                     div()
                         .text_xs()
                         .text_color(rgb(t.yellow))
-                        .child("Der Commit liegt schon auf dem Remote. Der Push ersetzt ihn dort (force-with-lease)."),
+                        .child("This commit is already on the remote. The push replaces it there (force-with-lease)."),
                 )
             })
             .child(primary_button(
@@ -1851,7 +1851,7 @@ impl GitBro {
                         cx.listener(|this, _, window, cx| this.open_dialog(DialogKind::Stash, window, cx)),
                     ))
                     .child(activate(
-                        tool_button(t, "discard", Icon::Trash, "Verwerfen")
+                        tool_button(t, "discard", Icon::Trash, "Discard")
                             .flex_1()
                             .justify_center()
                             .h(px(30.))
@@ -1871,49 +1871,49 @@ impl GitBro {
         let t = self.theme;
         let (title, note, confirm, confirm_icon, danger) = match &dialog.kind {
             DialogKind::NewBranch { from } => (
-                "Neuer Branch".to_owned(),
-                format!("Startet bei „{from}“ und wird gleich ausgecheckt. Nicht committete Änderungen gehen mit."),
-                "Anlegen",
+                "New branch".to_owned(),
+                format!("Starts at “{from}” and is checked out right away. Uncommitted changes come along."),
+                "Create",
                 Icon::Branch,
                 false,
             ),
             DialogKind::Stash => (
-                "Änderungen stashen".to_owned(),
-                "Alle Änderungen, auch neue Dateien, werden in einen Stash gelegt. Du findest ihn danach in der Sidebar unter „Stashes“."
+                "Stash changes".to_owned(),
+                "All changes, including new files, go into a stash. You will find it afterwards in the sidebar under “Stashes”."
                     .to_owned(),
-                "Stashen",
+                "Stash",
                 Icon::Stash,
                 false,
             ),
             DialogKind::Discard { files, merging } => (
-                "Alle Änderungen verwerfen?".to_owned(),
+                "Discard all changes?".to_owned(),
                 format!(
-                    "{} Der Stand springt auf den letzten Commit zurück, neue Dateien werden gelöscht.{} Das lässt sich nicht rückgängig machen.",
+                    "{} Everything goes back to the last commit and new files are deleted.{} This cannot be undone.",
                     match files {
-                        1 => "Eine Datei mit Änderungen:".to_owned(),
-                        n => format!("{n} Dateien mit Änderungen:"),
+                        1 => "One file with changes:".to_owned(),
+                        n => format!("{n} files with changes:"),
                     },
-                    if *merging { " Der offene Merge wird abgebrochen." } else { "" },
+                    if *merging { " The open merge is aborted." } else { "" },
                 ),
-                "Verwerfen",
+                "Discard",
                 Icon::Trash,
                 true,
             ),
             DialogKind::DeleteBranch { name, unique } => (
-                format!("Branch „{name}“ löschen?"),
+                format!("Delete branch “{name}”?"),
                 match unique {
-                    0 => "Alles, was in diesem Branch steckt, ist auch anderswo erreichbar (anderer Branch, Remote oder Tag). Es geht nichts verloren.".to_owned(),
-                    1 => "Ein Commit existiert nur in diesem Branch und geht mit dem Löschen verloren.".to_owned(),
-                    n => format!("{n} Commits existieren nur in diesem Branch und gehen mit dem Löschen verloren."),
+                    0 => "Everything in this branch is also reachable elsewhere (another branch, remote or tag). Nothing is lost.".to_owned(),
+                    1 => "One commit exists only in this branch and is lost when it is deleted.".to_owned(),
+                    n => format!("{n} commits exist only in this branch and are lost when it is deleted."),
                 },
-                "Löschen",
+                "Delete",
                 Icon::Trash,
                 true,
             ),
             DialogKind::DropStash { message, .. } => (
-                "Stash löschen?".to_owned(),
-                format!("„{message}“ wird endgültig entfernt. Die darin gesicherten Änderungen gehen verloren."),
-                "Löschen",
+                "Delete stash?".to_owned(),
+                format!("“{message}” is removed permanently. The changes saved in it are lost."),
+                "Delete",
                 Icon::Trash,
                 true,
             ),
@@ -1957,7 +1957,7 @@ impl GitBro {
                     .justify_end()
                     .gap_2()
                     .child(activate(
-                        tool_button(t, "dialog-cancel", Icon::X, "Abbrechen")
+                        tool_button(t, "dialog-cancel", Icon::X, "Cancel")
                             .h(px(30.))
                             .border_1()
                             .border_color(rgb(t.border)),

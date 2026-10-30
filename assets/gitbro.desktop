@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=GitBro
-Comment=Schlanker Git-Client
+Comment=Slim Git client
 Exec=gitbro
 Icon=gitbro
 Terminal=false

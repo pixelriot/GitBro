@@ -21,25 +21,27 @@ startet sofort und fühlt sich an wie ein Teil des Desktops statt wie eine schwe
 
 GitBro ist bewusst meinungsstark. Git hat viel Zeremonie, GitBro fasst den Alltag in möglichst wenige Schritte zusammen:
 
-> **WIP-Zeile auswählen → Nachricht schreiben → _Committen & Pushen_.**
+> **WIP-Zeile auswählen → Nachricht schreiben → _Commit & Push_.**
 
 Keine Staging Area, kein separater Push.
+
+> **Hinweis:** Die Oberfläche ist auf Englisch.
 
 ## Funktionen
 
 - **Alles auf einen Blick** – Graph aller Branches, Remote-Branches, Tags und Stashes mit Ahead/Behind-Zähler. Nicht committete Änderungen erscheinen oben als **WIP**-Zeile.
 - **Commit in einem Schritt** – alles Geänderte (auch neue Dateien) wird committet und sofort gepusht. Beim ersten Push eines neuen Branches wird der Upstream gesetzt. Ohne Remote wird nur committet.
-- **Amend** – Häkchen bei „Letzten Commit ändern“, die letzte Nachricht wird vorausgefüllt. Liegt der Commit schon auf dem Remote, wird der Button gelb und sagt es dir: Der Push nutzt dann `--force-with-lease` und überschreibt nie Arbeit, die jemand anderes inzwischen gepusht hat.
+- **Amend** – Häkchen bei „Amend last commit“, die letzte Nachricht wird vorausgefüllt. Liegt der Commit schon auf dem Remote, wird der Button gelb und sagt es dir: Der Push nutzt dann `--force-with-lease` und überschreibt nie Arbeit, die jemand anderes inzwischen gepusht hat.
 - **Alles verwerfen** – ein Button, immer mit Bestätigung. Setzt getrackte Dateien zurück, löscht neue und beendet einen offenen Merge. Ignorierte Dateien bleiben.
 - **Stash** – inklusive neuer Dateien und mit optionalem Namen; Anwenden, Entnehmen und Löschen in der Sidebar.
 - **Branches** – anlegen im ⋯-Menü des aktuellen Branches, Doppelklick zum Auschecken, Mergen und Löschen im ⋯-Menü. Vor dem Löschen siehst du, wie viele Commits _nur_ auf diesem Branch existieren.
 - **Sicherer Pull** – holt alles, räumt auf und spult vor. Es entsteht nie ein überraschender Merge-Commit; sind die Historien auseinandergelaufen, sagt GitBro es dir.
-- **Diff im Vollbild** – Dateiliste, Zeilennummern, Binärerkennung und „Neuer“/„Älter“ zum Blättern.
+- **Diff im Vollbild** – Dateiliste, Zeilennummern, Binärerkennung und „Newer“/„Older“ zum Blättern.
 - **Kleinigkeiten** – zuletzt geöffnete Repos (`Strg+R`), das letzte Repo öffnet automatisch, ein normaler Ordner wird mit einem Klick zum Repository (Standard-Branch `main`), und die Ansicht aktualisiert sich, sobald das Fenster wieder den Fokus bekommt.
 
 | Commit & Push in einem Schritt | Letzten Commit ändern |
 | --- | --- |
-| ![Commit-Nachricht, geänderte Dateien, Button „Committen & Pushen“](docs/screenshots/commit-and-push.png) | ![Amend mit vorausgefüllter Nachricht](docs/screenshots/amend.png) |
+| ![Commit-Nachricht, geänderte Dateien, Button „Commit & Push“](docs/screenshots/commit-and-push.png) | ![Amend mit vorausgefüllter Nachricht](docs/screenshots/amend.png) |
 
 | Commit ansehen | Neuer Branch |
 | --- | --- |

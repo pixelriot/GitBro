@@ -81,7 +81,7 @@ pub struct NotARepo(pub PathBuf);
 
 impl std::fmt::Display for NotARepo {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{} ist kein Git-Repository", self.0.display())
+        write!(f, "{} is not a Git repository", self.0.display())
     }
 }
 
@@ -93,7 +93,7 @@ pub fn load(path: &Path) -> Result<Snapshot> {
         Err(err) if err.code() == ErrorCode::NotFound && path.is_dir() => {
             return Err(NotARepo(path.to_path_buf()).into());
         }
-        Err(err) => return Err(anyhow::Error::new(err).context("Kein Git-Repository gefunden")),
+        Err(err) => return Err(anyhow::Error::new(err).context("No Git repository found")),
     };
     // `workdir()` ends in a slash; strip it so the path compares equal to what a user picks.
     let workdir: PathBuf = repo.workdir().unwrap_or_else(|| repo.path()).components().collect();
@@ -226,7 +226,7 @@ pub fn load(path: &Path) -> Result<Snapshot> {
                 oid: wip_oid(),
                 wip: true,
                 short: String::new(),
-                summary: format!("Aktuelle Änderungen ({changed})"),
+                summary: format!("Current changes ({changed})"),
                 author: String::new(),
                 time: String::new(),
                 parents: head_oid.into_iter().collect(),
@@ -385,7 +385,7 @@ fn collect_files(diff: &git2::Diff<'_>, budget: &mut usize) -> Result<(Vec<FileD
                         kind: LineKind::Note,
                         old: None,
                         new: None,
-                        text: "… Diff gekürzt, zu viele Zeilen".into(),
+                        text: "… diff truncated, too many lines".into(),
                     });
                 }
                 *budget = budget.saturating_sub(file.lines.len());
@@ -406,7 +406,7 @@ fn collect_files(diff: &git2::Diff<'_>, budget: &mut usize) -> Result<(Vec<FileD
 /// Loads message, metadata and the diff against the first parent (the empty tree for a root commit).
 /// `wip_oid()` loads the uncommitted changes instead.
 pub fn load_detail(path: &Path, oid: Oid) -> Result<CommitDetail> {
-    let repo = Repository::discover(path).context("Kein Git-Repository gefunden")?;
+    let repo = Repository::discover(path).context("No Git repository found")?;
     if oid == wip_oid() {
         return load_wip(&repo);
     }
@@ -466,7 +466,7 @@ fn load_wip(repo: &Repository) -> Result<CommitDetail> {
     Ok(CommitDetail {
         wip: true,
         id: String::new(),
-        summary: "Aktuelle Änderungen".into(),
+        summary: "Current changes".into(),
         body: String::new(),
         author: String::new(),
         email: String::new(),
@@ -490,7 +490,7 @@ fn run(path: &Path, args: &[&str]) -> Result<String> {
         .env("GIT_EDITOR", "true")
         .stdin(Stdio::null())
         .output()
-        .context("git konnte nicht gestartet werden")?;
+        .context("could not start git")?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     let text = text.trim().to_owned();
@@ -508,21 +508,21 @@ fn run(path: &Path, args: &[&str]) -> Result<String> {
 pub fn sync(path: &Path) -> Result<String> {
     run(path, &["fetch", "--all", "--prune"])?;
     if run(path, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_err() {
-        return Ok("Fetch fertig. Der Branch hat keinen Upstream, es gibt nichts zu übernehmen.".into());
+        return Ok("Fetch done. The branch has no upstream, so there is nothing to pull.".into());
     }
     let counts = run(path, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])?;
     let mut parts = counts.split_whitespace().map(|n| n.parse::<usize>().unwrap_or(0));
     let (ahead, behind) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
     match (ahead, behind) {
-        (0, 0) => Ok("Bereits aktuell.".into()),
-        (ahead, 0) => Ok(format!("Aktuell. {ahead} lokale Commits sind noch nicht gepusht.")),
+        (0, 0) => Ok("Already up to date.".into()),
+        (ahead, 0) => Ok(format!("Up to date. {ahead} local commits are not pushed yet.")),
         (0, behind) => {
             run(path, &["merge", "--ff-only", "@{upstream}"])?;
-            Ok(format!("{behind} neue Commits übernommen."))
+            Ok(format!("Pulled {behind} new commits."))
         }
         (ahead, behind) => bail!(
-            "Lokal (↑{ahead}) und Remote (↓{behind}) sind auseinandergelaufen, daher wurde nichts zusammengeführt.\n\
-             Zum Mergen: den Remote-Branch in der Sidebar anklicken und „Mergen“ wählen."
+            "Local (↑{ahead}) and remote (↓{behind}) have diverged, so nothing was merged.\n\
+             To merge: click the remote branch in the sidebar and choose “Merge into …”."
         ),
     }
 }
@@ -549,7 +549,7 @@ fn remote_name(path: &Path) -> Option<String> {
 /// someone else pushed in the meantime. A repository without a remote has nothing to push to.
 pub fn push(path: &Path, force: bool) -> Result<String> {
     let Some(remote) = remote_name(path) else {
-        return Ok("Kein Remote eingerichtet, daher nichts gepusht.".into());
+        return Ok("No remote configured, so nothing was pushed.".into());
     };
     let lease = force.then_some("--force-with-lease");
     let mut args = vec!["push"];
@@ -558,7 +558,7 @@ pub fn push(path: &Path, force: bool) -> Result<String> {
         args.extend(["--set-upstream", remote.as_str(), "HEAD"]);
     }
     run(path, &args)?;
-    Ok(format!("Gepusht an {remote}."))
+    Ok(format!("Pushed to {remote}."))
 }
 
 pub fn merge(path: &Path, branch: &str) -> Result<String> {
@@ -584,12 +584,12 @@ pub fn checkout(path: &Path, branch: &str, remote: bool) -> Result<String> {
 pub fn commit(path: &Path, message: &str, amend: bool) -> Result<String> {
     let message = message.trim();
     if message.is_empty() {
-        bail!("Die Commit-Nachricht ist leer.");
+        bail!("The commit message is empty.");
     }
     // `add -A` would silently mark conflict markers as resolved.
     let conflicted = run(path, &["diff", "--name-only", "--diff-filter=U"])?;
     if !conflicted.is_empty() {
-        bail!("Es gibt noch ungelöste Merge-Konflikte:\n{conflicted}");
+        bail!("There are still unresolved merge conflicts:\n{conflicted}");
     }
     run(path, &["add", "-A"])?;
     if amend {
@@ -601,7 +601,7 @@ pub fn commit(path: &Path, message: &str, amend: bool) -> Result<String> {
 
 /// The full message of the last commit, to start an amend from.
 pub fn head_message(path: &Path) -> Result<String> {
-    let repo = Repository::discover(path).context("Kein Git-Repository gefunden")?;
+    let repo = Repository::discover(path).context("No Git repository found")?;
     let commit = repo.head()?.peel_to_commit()?;
     Ok(commit.message().unwrap_or("").trim().to_owned())
 }
@@ -616,7 +616,7 @@ pub fn discard_all(path: &Path) -> Result<String> {
         run(path, &["read-tree", "--empty"])?;
     }
     run(path, &["clean", "-fdq"])?;
-    Ok("Änderungen verworfen.".into())
+    Ok("Changes discarded.".into())
 }
 
 /// Puts the uncommitted changes, untracked files included, on the stash.
@@ -654,7 +654,7 @@ pub fn delete_branch(path: &Path, name: &str) -> Result<String> {
 /// Number of commits that exist only on this local branch, i.e. that no other branch, remote
 /// branch, tag or HEAD can reach. Those are the ones deleting the branch would orphan.
 pub fn unique_commits(path: &Path, name: &str) -> Result<usize> {
-    let repo = Repository::discover(path).context("Kein Git-Repository gefunden")?;
+    let repo = Repository::discover(path).context("No Git repository found")?;
     let own = format!("refs/heads/{name}");
     let tip = repo.find_reference(&own)?.peel_to_commit()?.id();
     let mut walk = repo.revwalk()?;
@@ -689,7 +689,7 @@ fn format_time(secs: i64) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{day:02}.{month:02}.{year} {:02}:{:02}", rem / 3600, rem % 3600 / 60)
+    format!("{year}-{month:02}-{day:02} {:02}:{:02}", rem / 3600, rem % 3600 / 60)
 }
 
 #[cfg(test)]
@@ -789,11 +789,11 @@ mod tests {
 
         assert_eq!(load(&b).unwrap().commits.len(), 1);
         let msg = sync(&b).unwrap();
-        assert!(msg.contains("1 neue Commits"), "{msg}");
+        assert!(msg.contains("Pulled 1 new commits"), "{msg}");
         let snap = load(&b).unwrap();
         assert_eq!(snap.commits.len(), 2);
         assert_eq!(snap.local[0].behind, 0);
-        assert!(sync(&b).unwrap().contains("aktuell"));
+        assert!(sync(&b).unwrap().contains("up to date"));
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -805,7 +805,7 @@ mod tests {
         commit(&b, "b.txt", "local\n");
 
         let err = sync(&b).unwrap_err().to_string();
-        assert!(err.contains("auseinandergelaufen"), "{err}");
+        assert!(err.contains("diverged"), "{err}");
         let snap = load(&b).unwrap();
         assert!(!snap.merging);
         assert_eq!(snap.commits.iter().filter(|c| c.parents.len() == 2).count(), 0);
@@ -817,7 +817,7 @@ mod tests {
         let dir = scratch("sync-none");
         repo(&dir);
         let msg = sync(&dir).unwrap();
-        assert!(msg.contains("keinen Upstream"), "{msg}");
+        assert!(msg.contains("no upstream"), "{msg}");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -825,18 +825,18 @@ mod tests {
     fn detail_lists_files_and_lines() {
         let dir = scratch("detail");
         repo(&dir);
-        fs::write(dir.join("a.txt"), "1\nzwei\n").unwrap();
-        fs::write(dir.join("new.txt"), "neu\n").unwrap();
+        fs::write(dir.join("a.txt"), "1\ntwo\n").unwrap();
+        fs::write(dir.join("new.txt"), "new\n").unwrap();
         sh(&dir, &["add", "."]);
-        sh(&dir, &["commit", "-q", "-m", "Titel\n\nLanger Text"]);
+        sh(&dir, &["commit", "-q", "-m", "Title\n\nLong text"]);
 
         let snap = load(&dir).unwrap();
         let d = load_detail(&dir, snap.commits[0].oid).unwrap();
-        assert_eq!((d.summary.as_str(), d.body.as_str()), ("Titel", "Langer Text"));
+        assert_eq!((d.summary.as_str(), d.body.as_str()), ("Title", "Long text"));
         assert_eq!(d.files.len(), 2);
         let a = d.files.iter().find(|f| f.path == "a.txt").unwrap();
         assert_eq!((a.status, a.added, a.removed), ('M', 1, 0));
-        assert!(a.lines.iter().any(|l| l.kind == LineKind::Add && l.text == "zwei"));
+        assert!(a.lines.iter().any(|l| l.kind == LineKind::Add && l.text == "two"));
         let n = d.files.iter().find(|f| f.path == "new.txt").unwrap();
         assert_eq!(n.status, 'A');
 
@@ -923,22 +923,22 @@ mod tests {
         fs::remove_file(dir.join("a.txt")).unwrap();
 
         assert!(super::commit(&dir, "  \n", false).is_err(), "an empty message is refused");
-        super::commit(&dir, "Alles auf einmal\n\nMit Beschreibung", false).unwrap();
+        super::commit(&dir, "Everything at once\n\nWith body", false).unwrap();
         let snap = load(&dir).unwrap();
         assert!(snap.commits.iter().all(|c| !c.wip), "nothing is left behind");
         assert_eq!(snap.commits.len(), 2);
         let d = load_detail(&dir, snap.commits[0].oid).unwrap();
-        assert_eq!((d.summary.as_str(), d.body.as_str()), ("Alles auf einmal", "Mit Beschreibung"));
+        assert_eq!((d.summary.as_str(), d.body.as_str()), ("Everything at once", "With body"));
         let paths: Vec<_> = d.files.iter().map(|f| f.path.as_str()).collect();
         assert_eq!(paths, ["a.txt", "new file *.txt"], "the deletion and the new file are both in");
 
-        assert_eq!(head_message(&dir).unwrap(), "Alles auf einmal\n\nMit Beschreibung");
+        assert_eq!(head_message(&dir).unwrap(), "Everything at once\n\nWith body");
         fs::write(dir.join("later.txt"), "l\n").unwrap();
-        super::commit(&dir, "Neuer Text", true).unwrap();
+        super::commit(&dir, "New text", true).unwrap();
         let snap = load(&dir).unwrap();
         assert_eq!(snap.commits.len(), 2, "amend adds no commit");
         let d = load_detail(&dir, snap.commits[0].oid).unwrap();
-        assert_eq!(d.summary, "Neuer Text");
+        assert_eq!(d.summary, "New text");
         assert_eq!(d.files.len(), 3, "the new file joined the amended commit");
         fs::remove_dir_all(dir).unwrap();
     }
@@ -950,7 +950,7 @@ mod tests {
         sh(&dir, &["config", "user.name", "T"]);
         sh(&dir, &["config", "user.email", "t@t"]);
         fs::write(dir.join("x.txt"), "x\n").unwrap();
-        super::commit(&dir, "Erster", false).unwrap();
+        super::commit(&dir, "First", false).unwrap();
         assert_eq!(load(&dir).unwrap().commits.len(), 1);
         fs::remove_dir_all(dir).unwrap();
     }
@@ -964,8 +964,8 @@ mod tests {
         checkout(&dir, "main", false).unwrap();
         commit(&dir, "a.txt", "main\n");
         assert!(merge(&dir, "topic").is_err());
-        let err = super::commit(&dir, "Zu früh", false).unwrap_err().to_string();
-        assert!(err.contains("Konflikt") && err.contains("a.txt"), "{err}");
+        let err = super::commit(&dir, "Too early", false).unwrap_err().to_string();
+        assert!(err.contains("conflict") && err.contains("a.txt"), "{err}");
         assert!(load(&dir).unwrap().merging, "the merge is still open");
         fs::remove_dir_all(dir).unwrap();
     }
@@ -977,7 +977,7 @@ mod tests {
         push(&a, false).unwrap();
         assert!(load(&a).unwrap().local[0].upstream);
 
-        super::commit(&a, "Umformuliert", true).unwrap();
+        super::commit(&a, "Reworded", true).unwrap();
         assert!(push(&a, false).is_err(), "a rewritten, already pushed commit is rejected");
         push(&a, true).unwrap();
         sh(&b, &["fetch", "-q"]);
@@ -987,7 +987,7 @@ mod tests {
 
         let lonely = scratch("push-none");
         repo(&lonely);
-        assert!(push(&lonely, false).unwrap().contains("Kein Remote"));
+        assert!(push(&lonely, false).unwrap().contains("No remote"));
         fs::remove_dir_all(lonely).unwrap();
         fs::remove_dir_all(root).unwrap();
     }
@@ -996,20 +996,20 @@ mod tests {
     fn discard_removes_every_uncommitted_change() {
         let dir = scratch("discard");
         repo(&dir);
-        commit(&dir, ".gitignore", "ignoriert.log\n");
-        fs::write(dir.join("ignoriert.log"), "log\n").unwrap();
-        fs::write(dir.join("a.txt"), "1\nbearbeitet\n").unwrap();
-        fs::write(dir.join("neu.txt"), "n\n").unwrap();
-        sh(&dir, &["add", "neu.txt"]); // staged
-        fs::create_dir_all(dir.join("ordner")).unwrap();
-        fs::write(dir.join("ordner/tief.txt"), "t\n").unwrap(); // untracked, in a new folder
+        commit(&dir, ".gitignore", "ignored.log\n");
+        fs::write(dir.join("ignored.log"), "log\n").unwrap();
+        fs::write(dir.join("a.txt"), "1\nedited\n").unwrap();
+        fs::write(dir.join("added.txt"), "n\n").unwrap();
+        sh(&dir, &["add", "added.txt"]); // staged
+        fs::create_dir_all(dir.join("folder")).unwrap();
+        fs::write(dir.join("folder/deep.txt"), "t\n").unwrap(); // untracked, in a new folder
 
         discard_all(&dir).unwrap();
         let snap = load(&dir).unwrap();
         assert!(snap.commits.iter().all(|c| !c.wip), "the tree is clean");
         assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "1\n");
-        assert!(!dir.join("neu.txt").exists() && !dir.join("ordner").exists());
-        assert!(dir.join("ignoriert.log").exists(), "ignored files are not touched");
+        assert!(!dir.join("added.txt").exists() && !dir.join("folder").exists());
+        assert!(dir.join("ignored.log").exists(), "ignored files are not touched");
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1044,14 +1044,14 @@ mod tests {
         repo(&dir);
         assert!(load(&dir).unwrap().stashes.is_empty());
 
-        fs::write(dir.join("a.txt"), "1\nlokal\n").unwrap();
-        fs::write(dir.join("neu.txt"), "n\n").unwrap();
-        stash_push(&dir, "Mein Stand").unwrap();
+        fs::write(dir.join("a.txt"), "1\nlocal\n").unwrap();
+        fs::write(dir.join("added.txt"), "n\n").unwrap();
+        stash_push(&dir, "My state").unwrap();
         let snap = load(&dir).unwrap();
         assert!(snap.commits.iter().all(|c| !c.wip), "the tree is clean after stashing");
-        assert!(!dir.join("neu.txt").exists(), "untracked files are stashed too");
+        assert!(!dir.join("added.txt").exists(), "untracked files are stashed too");
         assert_eq!(snap.stashes.len(), 1);
-        assert!(snap.stashes[0].message.contains("Mein Stand"), "{}", snap.stashes[0].message);
+        assert!(snap.stashes[0].message.contains("My state"), "{}", snap.stashes[0].message);
 
         stash_apply(&dir, 0).unwrap();
         assert_eq!(load(&dir).unwrap().stashes.len(), 1, "apply keeps the stash");
@@ -1059,7 +1059,7 @@ mod tests {
         assert_eq!(load(&dir).unwrap().stashes.len(), 2);
         stash_pop(&dir, 0).unwrap();
         assert_eq!(load(&dir).unwrap().stashes.len(), 1, "pop removes it");
-        assert!(dir.join("neu.txt").exists());
+        assert!(dir.join("added.txt").exists());
         sh(&dir, &["reset", "-q", "--hard"]);
         sh(&dir, &["clean", "-fdq"]);
         stash_drop(&dir, 0).unwrap();
