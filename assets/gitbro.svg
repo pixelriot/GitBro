@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>GitBro</title>
+  <!-- Everforest dark: background and the three graph colours -->
+  <rect width="512" height="512" fill="#2d353b"/>
+
+  <!-- branch that forks off the lower main commit and merges back into the top one -->
+  <path d="M168 400H344V112H168" fill="none" stroke="#a7c080" stroke-width="36" stroke-linejoin="miter"/>
+  <!-- main line -->
+  <path d="M168 112V400" fill="none" stroke="#7fbbb3" stroke-width="36"/>
+
+  <!-- commits -->
+  <rect x="126" y="70" width="84" height="84" fill="#dbbc7f"/>
+  <rect x="126" y="214" width="84" height="84" fill="#7fbbb3"/>
+  <rect x="126" y="358" width="84" height="84" fill="#7fbbb3"/>
+  <rect x="302" y="214" width="84" height="84" fill="#a7c080"/>
+</svg>

@@ -1,0 +1,23 @@
+[package]
+name = "gitbro"
+version = "0.1.0"
+edition = "2024"
+description = "A slim Git client built with and for Omarchy: see the graph, commit and push in one step"
+license = "0BSD"
+repository = "https://github.com/pixelriot/GitBro"
+readme = "README.md"
+keywords = ["git", "gui", "gpui", "omarchy", "hyprland"]
+categories = ["development-tools", "gui"]
+
+[dependencies]
+anyhow = "1.0.104"
+git2 = "0.21.0"
+gpui = "0.2.2"
+unicode-segmentation = "1"
+
+# gpui paints and lays out every frame; unoptimized it drops to ~5 fps on a large graph.
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3

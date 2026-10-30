@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=GitBro
+Comment=Schlanker Git-Client
+Exec=gitbro
+Icon=gitbro
+Terminal=false
+Categories=Development;
+StartupWMClass=gitbro
