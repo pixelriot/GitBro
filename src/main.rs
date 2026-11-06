@@ -20,7 +20,10 @@ use gpui::{
 use icons::{Icon, icon};
 use input::{InputColors, InputEvent, TextInput};
 use graph::{Graph, GraphRow};
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use theme::Theme;
 
 actions!(gitbro, [SelectPrev, SelectNext, CloseDetail, OpenSelected, ToggleRecent, OpenRepo]);
@@ -220,11 +223,11 @@ impl GitBro {
                 self.selected_branch = None;
             }
         }
-        if self.recent.first() != Some(&snapshot.path) {
-            self.recent.retain(|p| *p != snapshot.path);
-            self.recent.insert(0, snapshot.path.clone());
-            self.recent.truncate(MAX_RECENT);
-            save_recent(&self.recent);
+        // A refresh of the open repository must not put a removed entry back.
+        // Recording happens when the open repository changes.
+        let switching = self.snapshot.as_ref().is_none_or(|current| current.path != snapshot.path);
+        if switching {
+            self.note_recent(&snapshot.path);
         }
         if let Some(MenuTarget::Stash(index)) = self.menu
             && index >= snapshot.stashes.len()
@@ -491,9 +494,34 @@ impl GitBro {
         self.detail = None;
         self.recent_open = false;
         self.menu = None;
+        // Opening the repository already on screen is how a removed entry gets back on the list.
+        if self.snapshot.as_ref().is_some_and(|current| current.path == path) {
+            self.note_recent(&path);
+        }
         self.set_status(Status::Busy("Loading repository…".into()));
         self.reload(path, cx);
         cx.notify();
+    }
+
+    /// Puts `path` at the front of the recent list and stores it.
+    fn note_recent(&mut self, path: &Path) {
+        if self.recent.first().is_some_and(|p| p == path) {
+            return;
+        }
+        self.recent.retain(|p| p != path);
+        self.recent.insert(0, path.to_path_buf());
+        self.recent.truncate(MAX_RECENT);
+        save_recent(&self.recent);
+    }
+
+    /// Drops `path` from the recent list. The repository on disk is left alone, and a later
+    /// refresh does not add the open one back; opening it again does.
+    fn forget_recent(&mut self, path: &Path) {
+        let len = self.recent.len();
+        self.recent.retain(|p| p != path);
+        if self.recent.len() != len {
+            save_recent(&self.recent);
+        }
     }
 
     fn select_branch(&mut self, branch: &BranchInfo, remote: bool, cx: &mut Context<Self>) {
@@ -1195,25 +1223,13 @@ impl GitBro {
             menu_panel(t, "stash-menu")
                 .child(menu_item(
                     t,
-                    "stash-apply",
-                    Icon::Unstash,
-                    "Apply",
-                    !busy,
-                    cx.listener(move |this, _, _, cx| {
-                        this.menu = None;
-                        this.run("Applying stash…", cx, move |p| git::stash_apply(p, index));
-                        cx.notify();
-                    }),
-                ))
-                .child(menu_item(
-                    t,
                     "stash-pop",
                     Icon::Unstash,
                     "Pop",
                     !busy,
                     cx.listener(move |this, _, _, cx| {
                         this.menu = None;
-                        this.run("Applying stash…", cx, move |p| git::stash_pop(p, index));
+                        this.run("Popping stash…", cx, move |p| git::stash_pop(p, index));
                         cx.notify();
                     }),
                 ))
@@ -1410,7 +1426,7 @@ impl GitBro {
                                 .text_color(rgb(t.subtext))
                                 .child("RECENT"),
                         )
-                        .children(self.recent_items(cx)),
+                        .children(self.recent_items("welcome", cx)),
                 )
             })
             .into_any_element()
@@ -1487,7 +1503,7 @@ impl GitBro {
             .border_color(rgb(t.selected))
             .shadow_md()
             .occlude()
-            .children(self.recent_items(cx))
+            .children(self.recent_items("menu", cx))
             .child(
                 div()
                     .border_t_1()
@@ -1517,7 +1533,7 @@ impl GitBro {
         )
     }
 
-    fn recent_items(&self, cx: &mut Context<Self>) -> Vec<Stateful<gpui::Div>> {
+    fn recent_items(&self, id_prefix: &'static str, cx: &mut Context<Self>) -> Vec<Stateful<gpui::Div>> {
         let t = self.theme;
         self.recent
             .iter()
@@ -1528,13 +1544,15 @@ impl GitBro {
                     .map_or_else(|| path.to_string_lossy().into_owned(), |n| n.to_string_lossy().into_owned());
                 let dir = path.parent().map(|p| p.to_string_lossy().into_owned()).unwrap_or_default();
                 let target = path.clone();
+                let remove = path.clone();
                 div()
-                    .id(("recent", ix))
+                    .id(ElementId::Name(SharedString::from(format!("{id_prefix}-recent-{ix}"))))
                     .flex()
                     .items_center()
                     .gap_2()
                     .h(px(32.))
-                    .px_3()
+                    .pl_3()
+                    .pr_1()
                     .cursor_pointer()
                     .hover(move |d| d.bg(rgb(t.selected)))
                     .on_click(cx.listener(move |this, _, _, cx| this.open_path(target.clone(), cx)))
@@ -1548,6 +1566,23 @@ impl GitBro {
                             .text_xs()
                             .text_color(rgb(t.subtext))
                             .child(dir),
+                    )
+                    .child(
+                        div()
+                            .id(ElementId::Name(SharedString::from(format!("{id_prefix}-recent-x-{ix}"))))
+                            .flex_none()
+                            .size(px(24.))
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .cursor_pointer()
+                            .hover(move |d| d.bg(rgb(t.border)))
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                cx.stop_propagation();
+                                this.forget_recent(&remove);
+                                cx.notify();
+                            }))
+                            .child(icon(Icon::X, 12., t.subtext)),
                     )
             })
             .collect()

@@ -33,11 +33,11 @@ Keine Staging Area, kein separater Push.
 - **Commit in einem Schritt** – alles Geänderte (auch neue Dateien) wird committet und sofort gepusht. Beim ersten Push eines neuen Branches wird der Upstream gesetzt. Ohne Remote wird nur committet.
 - **Amend** – Häkchen bei „Amend last commit“, die letzte Nachricht wird vorausgefüllt. Liegt der Commit schon auf dem Remote, wird der Button gelb und sagt es dir: Der Push nutzt dann `--force-with-lease` und überschreibt nie Arbeit, die jemand anderes inzwischen gepusht hat.
 - **Alles verwerfen** – ein Button, immer mit Bestätigung. Setzt getrackte Dateien zurück, löscht neue und beendet einen offenen Merge. Ignorierte Dateien bleiben.
-- **Stash** – inklusive neuer Dateien und mit optionalem Namen; Anwenden, Entnehmen und Löschen in der Sidebar.
+- **Stash** – inklusive neuer Dateien und mit optionalem Namen. In der Sidebar: **Pop** holt die Änderungen zurück und entfernt den Stash, Löschen wirft ihn weg.
 - **Branches** – anlegen im ⋯-Menü des aktuellen Branches, Doppelklick zum Auschecken, Mergen und Löschen im ⋯-Menü. Vor dem Löschen siehst du, wie viele Commits _nur_ auf diesem Branch existieren.
-- **Sicherer Pull** – holt alles, räumt auf und spult vor. Es entsteht nie ein überraschender Merge-Commit; sind die Historien auseinandergelaufen, sagt GitBro es dir.
+- **Sicherer Pull** – holt alles, räumt auf und spult vor. Nicht committete Änderungen, die dabei im Weg wären, werden dafür gestasht und danach wiederhergestellt. Es entsteht nie ein überraschender Merge-Commit; sind die Historien auseinandergelaufen, sagt GitBro es dir.
 - **Diff im Vollbild** – Dateiliste, Zeilennummern, Binärerkennung und „Newer“/„Older“ zum Blättern.
-- **Kleinigkeiten** – zuletzt geöffnete Repos (`Strg+R`), das letzte Repo öffnet automatisch, ein normaler Ordner wird mit einem Klick zum Repository (Standard-Branch `main`), und die Ansicht aktualisiert sich, sobald das Fenster wieder den Fokus bekommt.
+- **Kleinigkeiten** – zuletzt geöffnete Repos (`Strg+R`); das × nimmt einen Eintrag aus der Liste, das Repository bleibt liegen. Das letzte Repo öffnet automatisch, ein normaler Ordner wird mit einem Klick zum Repository (Standard-Branch `main`), und die Ansicht aktualisiert sich, sobald das Fenster wieder den Fokus bekommt.
 
 | Commit & Push in einem Schritt | Letzten Commit ändern |
 | --- | --- |

@@ -503,8 +503,9 @@ fn run(path: &Path, args: &[&str]) -> Result<String> {
 
 /// Fetches all remotes and fast-forwards the current branch to its upstream.
 ///
-/// Diverged branches are left alone: merging them is a decision the user makes explicitly,
-/// and a surprise merge commit or conflict behind a single button would be worse than a hint.
+/// A dirty worktree does not block that fast-forward: the uncommitted changes, untracked files
+/// included, are stashed for the update and restored afterwards. Diverged branches are left
+/// alone — merging them is a decision the user makes explicitly.
 pub fn sync(path: &Path) -> Result<String> {
     run(path, &["fetch", "--all", "--prune"])?;
     if run(path, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_err() {
@@ -516,13 +517,75 @@ pub fn sync(path: &Path) -> Result<String> {
     match (ahead, behind) {
         (0, 0) => Ok("Already up to date.".into()),
         (ahead, 0) => Ok(format!("Up to date. {ahead} local commits are not pushed yet.")),
-        (0, behind) => {
-            run(path, &["merge", "--ff-only", "@{upstream}"])?;
-            Ok(format!("Pulled {behind} new commits."))
-        }
+        (0, behind) => fast_forward(path, behind),
         (ahead, behind) => bail!(
             "Local (↑{ahead}) and remote (↓{behind}) have diverged, so nothing was merged.\n\
              To merge: click the remote branch in the sidebar and choose “Merge into …”."
+        ),
+    }
+}
+
+/// Fast-forwards to the upstream. If local changes would be overwritten, stashes them first
+/// (untracked files included) and puts them back afterwards. The stash is popped again even
+/// when the fast-forward fails, so a WIP is never left hidden behind a failed pull.
+fn fast_forward(path: &Path, behind: usize) -> Result<String> {
+    let pulled = format!("Pulled {behind} new commits.");
+    match run(path, &["merge", "--ff-only", "@{upstream}"]) {
+        Ok(_) => Ok(pulled),
+        Err(err) if can_set_aside_for_pull(path) => fast_forward_with_stash(path, &pulled, err),
+        Err(err) => Err(err),
+    }
+}
+
+/// True when the worktree has ordinary uncommitted changes and no merge, rebase, cherry-pick
+/// or revert is in progress. Those in-progress operations must not be swept into a stash.
+fn can_set_aside_for_pull(path: &Path) -> bool {
+    if ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]
+        .iter()
+        .any(|reference| run(path, &["rev-parse", "-q", "--verify", reference]).is_ok())
+    {
+        return false;
+    }
+    worktree_dirty(path).unwrap_or(false)
+}
+
+fn worktree_dirty(path: &Path) -> Result<bool> {
+    let status = run(path, &["status", "--porcelain"])?;
+    Ok(status.lines().any(|line| !line.is_empty()))
+}
+
+fn stash_len(path: &Path) -> Result<usize> {
+    let list = run(path, &["stash", "list"])?;
+    Ok(list.lines().filter(|line| !line.is_empty()).count())
+}
+
+fn fast_forward_with_stash(path: &Path, pulled: &str, blocked: anyhow::Error) -> Result<String> {
+    let before = stash_len(path)?;
+    let output = match stash_push(path, "uncommitted changes during pull") {
+        Ok(output) => output,
+        Err(err) => bail!("Could not set your changes aside to pull.\n{err}"),
+    };
+    // Counting is the source of truth. The message is only a fallback so a failed `stash list`
+    // cannot pop a stash the user already had.
+    let grew = match stash_len(path) {
+        Ok(after) => after > before,
+        Err(_) => output.starts_with("Saved working directory"),
+    };
+    if !grew {
+        // Nothing was stashed (git reports that as success). The fast-forward really is blocked.
+        return Err(blocked);
+    }
+    // The newest stash is the one just created. Pop that exact entry, even if the update fails.
+    let updated = run(path, &["merge", "--ff-only", "@{upstream}"]);
+    let restored = stash_pop(path, 0);
+    match (updated, restored) {
+        (Ok(_), Ok(_)) => Ok(pulled.to_owned()),
+        (Ok(_), Err(err)) => bail!(
+            "{pulled} Your uncommitted changes did not apply cleanly, so they are still the newest stash.\n{err}"
+        ),
+        (Err(err), Ok(_)) => Err(err),
+        (Err(err), Err(pop_err)) => bail!(
+            "{err}\nYour uncommitted changes could not be restored and are still the newest stash.\n{pop_err}"
         ),
     }
 }
@@ -627,10 +690,6 @@ pub fn stash_push(path: &Path, message: &str) -> Result<String> {
     } else {
         run(path, &["stash", "push", "--include-untracked", "-m", message])
     }
-}
-
-pub fn stash_apply(path: &Path, index: usize) -> Result<String> {
-    run(path, &["stash", "apply", &format!("stash@{{{index}}}")])
 }
 
 pub fn stash_pop(path: &Path, index: usize) -> Result<String> {
@@ -819,6 +878,125 @@ mod tests {
         let msg = sync(&dir).unwrap();
         assert!(msg.contains("no upstream"), "{msg}");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    /// A WIP on files the incoming commits do not touch stays where it is, and no stash is created.
+    #[test]
+    fn sync_leaves_unrelated_wip_in_place() {
+        let (root, a, b) = remote_pair("sync-wip-aside");
+        commit(&a, "b.txt", "remote\n");
+        push(&a, false).unwrap();
+        fs::write(b.join("a.txt"), "1\nlocal\n").unwrap();
+        fs::write(b.join("note.txt"), "untracked\n").unwrap();
+
+        let msg = sync(&b).unwrap();
+        assert!(msg.contains("Pulled 1 new commits"), "{msg}");
+        assert_eq!(fs::read_to_string(b.join("a.txt")).unwrap(), "1\nlocal\n");
+        assert_eq!(fs::read_to_string(b.join("note.txt")).unwrap(), "untracked\n");
+        assert_eq!(fs::read_to_string(b.join("b.txt")).unwrap(), "remote\n");
+        assert!(load(&b).unwrap().stashes.is_empty(), "nothing needed to be stashed");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// The case the pull button used to refuse: the same file is edited locally and on the remote.
+    #[test]
+    fn sync_stashes_wip_that_would_block_the_fast_forward() {
+        let (root, a, b) = remote_pair("sync-wip-block");
+        fs::write(a.join("a.txt"), "top\nmid\nbottom\n").unwrap();
+        sh(&a, &["commit", "-q", "-am", "three lines"]);
+        push(&a, false).unwrap();
+        sync(&b).unwrap();
+
+        // A stash the user made earlier must still be there after the temporary one is popped.
+        fs::write(b.join("old.txt"), "old\n").unwrap();
+        stash_push(&b, "keep me").unwrap();
+
+        fs::write(b.join("a.txt"), "top\nmid\nlocal\n").unwrap();
+        fs::write(b.join("note.txt"), "untracked\n").unwrap();
+        fs::write(a.join("a.txt"), "remote\nmid\nbottom\n").unwrap();
+        sh(&a, &["commit", "-q", "-am", "remote top"]);
+        push(&a, false).unwrap();
+
+        let msg = sync(&b).unwrap();
+        assert!(msg.contains("Pulled 1 new commits"), "{msg}");
+        assert_eq!(
+            fs::read_to_string(b.join("a.txt")).unwrap(),
+            "remote\nmid\nlocal\n",
+            "local and remote edits of the same file both survive"
+        );
+        assert_eq!(fs::read_to_string(b.join("note.txt")).unwrap(), "untracked\n");
+        let snap = load(&b).unwrap();
+        assert_eq!(snap.stashes.len(), 1, "the temporary stash is gone");
+        assert!(snap.stashes[0].message.contains("keep me"), "{}", snap.stashes[0].message);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    /// An untracked file the incoming commit also adds would make a plain fast-forward refuse.
+    #[test]
+    fn sync_stashes_an_untracked_file_the_pull_would_overwrite() {
+        let (root, a, b) = remote_pair("sync-untracked-block");
+        fs::write(a.join("note.txt"), "from remote\n").unwrap();
+        sh(&a, &["add", "note.txt"]);
+        sh(&a, &["commit", "-q", "-m", "add note"]);
+        push(&a, false).unwrap();
+        fs::write(b.join("note.txt"), "local untracked\n").unwrap();
+
+        // The committed file occupies the path, so the local copy cannot be checked back out.
+        // It stays in the stash instead of being deleted.
+        let err = sync(&b).unwrap_err().to_string();
+        assert!(err.contains("newest stash"), "{err}");
+        let snap = load(&b).unwrap();
+        assert_eq!(snap.stashes.len(), 1);
+        assert!(
+            snap.stashes[0].message.contains("uncommitted changes during pull"),
+            "{}",
+            snap.stashes[0].message
+        );
+        assert_eq!(fs::read_to_string(b.join("note.txt")).unwrap(), "from remote\n");
+        assert!(snap.commits.iter().any(|c| c.summary.contains("add note")), "the pull landed");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sync_keeps_the_stash_when_the_wip_conflicts_with_the_pull() {
+        let (root, a, b) = remote_pair("sync-wip-conflict");
+        fs::write(b.join("a.txt"), "local\n").unwrap();
+        fs::write(a.join("a.txt"), "remote\n").unwrap();
+        sh(&a, &["commit", "-q", "-am", "remote"]);
+        push(&a, false).unwrap();
+
+        let err = sync(&b).unwrap_err().to_string();
+        assert!(err.contains("newest stash"), "{err}");
+        let snap = load(&b).unwrap();
+        assert_eq!(snap.stashes.len(), 1, "a conflicting restore leaves the stash in place");
+        assert!(snap.commits.iter().any(|c| c.summary.contains("remote")), "the pull itself landed");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sync_does_not_stash_when_histories_diverged() {
+        let (root, a, b) = remote_pair("sync-diverged-wip");
+        commit(&a, "a.txt", "remote\n");
+        push(&a, false).unwrap();
+        commit(&b, "b.txt", "local\n");
+        fs::write(b.join("a.txt"), "wip\n").unwrap();
+
+        let err = sync(&b).unwrap_err().to_string();
+        assert!(err.contains("diverged"), "{err}");
+        assert!(load(&b).unwrap().stashes.is_empty());
+        assert_eq!(fs::read_to_string(b.join("a.txt")).unwrap(), "wip\n");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn sync_up_to_date_leaves_wip_unstashed() {
+        let (root, _a, b) = remote_pair("sync-uptodate-wip");
+        fs::write(b.join("a.txt"), "wip\n").unwrap();
+        let msg = sync(&b).unwrap();
+        assert!(msg.contains("up to date"), "{msg}");
+        assert!(load(&b).unwrap().stashes.is_empty());
+        assert_eq!(fs::read_to_string(b.join("a.txt")).unwrap(), "wip\n");
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
@@ -1053,15 +1231,13 @@ mod tests {
         assert_eq!(snap.stashes.len(), 1);
         assert!(snap.stashes[0].message.contains("My state"), "{}", snap.stashes[0].message);
 
-        stash_apply(&dir, 0).unwrap();
-        assert_eq!(load(&dir).unwrap().stashes.len(), 1, "apply keeps the stash");
-        stash_push(&dir, "").unwrap();
-        assert_eq!(load(&dir).unwrap().stashes.len(), 2);
         stash_pop(&dir, 0).unwrap();
-        assert_eq!(load(&dir).unwrap().stashes.len(), 1, "pop removes it");
+        assert!(load(&dir).unwrap().stashes.is_empty(), "pop removes the stash");
         assert!(dir.join("added.txt").exists());
         sh(&dir, &["reset", "-q", "--hard"]);
         sh(&dir, &["clean", "-fdq"]);
+        fs::write(dir.join("a.txt"), "1\nagain\n").unwrap();
+        stash_push(&dir, "drop me").unwrap();
         stash_drop(&dir, 0).unwrap();
         assert!(load(&dir).unwrap().stashes.is_empty());
         stash_push(&dir, "").unwrap(); // nothing to stash is no error for git
