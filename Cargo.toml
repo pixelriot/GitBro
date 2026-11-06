@@ -15,6 +15,12 @@ git2 = "0.21.0"
 gpui = "0.2.2"
 unicode-segmentation = "1"
 
+# gpui 0.2.2 → stacksafe 0.1.4 → proc-macro-error2 2.0.1 re-exports a private
+# `extern crate proc_macro`, which future Rust rejects (rust-lang/rust#127909).
+# The upstream crate is unmaintained, so the one-line fix lives in vendor/.
+[patch.crates-io]
+proc-macro-error2 = { path = "vendor/proc-macro-error2" }
+
 # gpui paints and lays out every frame; unoptimized it drops to ~5 fps on a large graph.
 [profile.dev]
 opt-level = 1

@@ -1,0 +1,37 @@
+[package]
+name = "proc-macro-error2"
+authors = [
+    "CreepySkeleton <creepy-skeleton@yandex.ru>",
+    "GnomedDev <david2005thomas@gmail.com>",
+]
+version = "2.0.1"
+description = "Almost drop-in replacement to panics in proc-macros"
+repository = "https://github.com/GnomedDev/proc-macro-error-2"
+rust-version = "1.61"
+keywords = ["proc-macro", "error", "errors"]
+categories = ["development-tools::procedural-macro-helpers"]
+license = "MIT OR Apache-2.0"
+edition = "2021"
+
+# Vendored from crates.io 2.0.1. The only code change is `pub extern crate proc_macro`
+# in src/lib.rs. Upstream re-exports a private extern crate, which future Rust rejects
+# (rust-lang/rust#127909). The published crate is unmaintained and has no newer release.
+
+[lib]
+name = "proc_macro_error2"
+path = "src/lib.rs"
+
+[dependencies]
+quote = "1"
+proc-macro2 = "1"
+proc-macro-error-attr2 = "=2.0.0"
+
+[dependencies.syn]
+version = "2"
+optional = true
+default-features = false
+
+[features]
+default = ["syn-error"]
+syn-error = ["dep:syn"]
+nightly = []
