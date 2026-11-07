@@ -15,7 +15,7 @@
 
 ![The commit graph with branches, tags, a stash and the pending changes (WIP)](docs/screenshots/history.png)
 
-GitBro is a native desktop Git client written in Rust with [gpui](https://www.gpui.rs) (the UI framework behind Zed).
+GitBro is a native desktop Git client written in Rust with [Rune](https://github.com/anomalyco/rune), a small native UI framework.
 It was made explicitly **for Omarchy and Hyprland**: it follows your Omarchy theme live, uses your Omarchy mono font in diffs,
 starts instantly, and is meant to feel like part of the desktop rather than a heavyweight IDE plugin.
 

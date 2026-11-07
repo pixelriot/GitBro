@@ -1,5 +1,9 @@
 use std::{collections::HashMap, path::PathBuf};
 
+use rune::color::srgb_decode;
+use rune::{Color, Spring};
+use rune_kit::{Kit, PaletteFocus, PaletteSeed, Radius, StateColors};
+
 /// Colors as 0xRRGGBB, derived from the active Omarchy theme's `colors.toml`.
 #[derive(Clone, Copy, PartialEq, Debug)]
 pub struct Theme {
@@ -43,6 +47,115 @@ impl Theme {
     /// The theme Omarchy currently has applied, or the default if it can't be read.
     pub fn current() -> Self {
         Self::read().unwrap_or_default()
+    }
+
+    /// One of the theme's `0xRRGGBB` colors as a Rune linear-light color.
+    pub fn c(&self, color: u32) -> Color {
+        let channel = |shift: u32| srgb_decode(((color >> shift) & 0xff) as f32 / 255.0);
+        Color {
+            r: channel(16),
+            g: channel(8),
+            b: channel(0),
+            a: 1.0,
+        }
+    }
+
+    pub fn lane(&self, i: usize) -> Color {
+        self.c(self.lanes[i % self.lanes.len()])
+    }
+
+    /// A Rune-kit theme matching the Omarchy palette, with angular corners and quick springs.
+    pub fn kit(&self) -> Kit {
+        let bg = self.c(self.bg);
+        let surface = self.c(self.surface);
+        let border = self.c(self.border);
+        let selected = self.c(self.selected);
+        let text = self.c(self.text);
+        let subtext = self.c(self.subtext);
+        let accent = self.c(self.accent);
+        let mut k = Kit::from_palette_focus(
+            PaletteSeed {
+                bg,
+                fg: text,
+                accent,
+            },
+            PaletteFocus::Accent,
+        );
+        // GitBro draws crisp rectangles, not pill-shaped controls.
+        k.radius = Radius {
+            xs: 0.0,
+            sm: 1.0,
+            md: 2.0,
+            lg: 2.0,
+            xl: 3.0,
+        };
+        k.motion.control = Spring::new(0.24, 0.0);
+        k.motion.overlay = Spring::new(0.3, 0.12);
+
+        k.c.page = bg;
+        k.c.bg_base = bg;
+        k.c.bg_deep = bg;
+        k.c.layer_01 = surface;
+        k.c.layer_02 = border;
+        k.c.layer_03 = selected;
+        k.c.layer_04 = selected;
+        k.c.surface_base = surface;
+        k.c.surface_weak = surface;
+        k.c.surface_raised = surface;
+        k.c.surface_raised_base = surface;
+        k.c.surface_raised_hover = selected;
+        k.c.surface_float = surface;
+        k.c.surface_hover = selected;
+
+        k.c.text_base = text;
+        k.c.text_strong = text;
+        k.c.text_muted = subtext;
+        k.c.text_weak = subtext;
+        k.c.text_faint = subtext;
+        k.c.text_accent = accent;
+        k.c.icon_base = text;
+        k.c.icon_muted = subtext;
+        k.c.icon_faint = subtext;
+        k.c.icon_accent = accent;
+
+        k.c.border_base = border;
+        k.c.border_weak = border;
+        k.c.border_muted = border;
+        k.c.border_strong = selected;
+        k.c.border_hover = selected;
+        k.c.border_focus = accent;
+        k.c.hover = selected.alpha(0.55);
+        k.c.pressed = selected;
+        k.c.scrim = Color::BLACK.alpha(0.55);
+        k.c.bg_accent = accent;
+        k.c.submit_fg = bg;
+        k.c.submit_icon = bg;
+
+        k.c.success = StateColors {
+            bg: self.c(self.green).alpha(0.16),
+            fg: self.c(self.green),
+            border: self.c(self.green).alpha(0.4),
+            icon: self.c(self.green),
+        };
+        k.c.warning = StateColors {
+            bg: self.c(self.yellow).alpha(0.16),
+            fg: self.c(self.yellow),
+            border: self.c(self.yellow).alpha(0.4),
+            icon: self.c(self.yellow),
+        };
+        k.c.danger = StateColors {
+            bg: self.c(self.red).alpha(0.16),
+            fg: self.c(self.red),
+            border: self.c(self.red).alpha(0.4),
+            icon: self.c(self.red),
+        };
+        k.c.info = StateColors {
+            bg: accent.alpha(0.16),
+            fg: accent,
+            border: accent.alpha(0.4),
+            icon: accent,
+        };
+        k
     }
 
     fn read() -> Option<Self> {

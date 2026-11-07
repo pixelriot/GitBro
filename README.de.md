@@ -15,7 +15,7 @@
 
 ![Der Commit-Graph mit Branches, Tags, Stash und den aktuellen Änderungen (WIP)](docs/screenshots/history.png)
 
-GitBro ist ein natives Desktop-Programm in Rust mit [gpui](https://www.gpui.rs) (dem UI-Framework hinter Zed).
+GitBro ist ein natives Desktop-Programm in Rust mit [Rune](https://github.com/anomalyco/rune), einem kleinen nativen UI-Framework.
 Es ist **für Omarchy und Hyprland** gemacht: Es folgt live deinem Omarchy-Theme, nutzt deine Omarchy-Monospace-Schrift in Diffs,
 startet sofort und fühlt sich an wie ein Teil des Desktops statt wie eine schwere IDE.
 
