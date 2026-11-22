@@ -112,3 +112,8 @@ line_icon!(
     "gitbro-trash",
     r#"<path d="M4 7h16" stroke="currentColor" stroke-width="2"/><path d="M9 7V4h6v3" stroke="currentColor" stroke-width="2"/><path d="M6 7v13h12V7" stroke="currentColor" stroke-width="2"/><path d="M10 11v6" stroke="currentColor" stroke-width="2"/><path d="M14 11v6" stroke="currentColor" stroke-width="2"/>"#
 );
+line_icon!(
+    KEY,
+    "gitbro-key",
+    r#"<rect x="3" y="8" width="8" height="8" stroke="currentColor" stroke-width="2"/><path d="M11 12h10" stroke="currentColor" stroke-width="2"/><path d="M17 12v4" stroke="currentColor" stroke-width="2"/><path d="M21 12v3" stroke="currentColor" stroke-width="2"/>"#
+);

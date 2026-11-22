@@ -1,9 +1,11 @@
+mod askpass;
 mod git;
 mod graph;
 mod icons;
 mod theme;
 
 use anyhow::{Context as _, Result};
+use askpass::Prompt;
 use git::{BranchInfo, CommitDetail, DiffLine, FileDiff, LineKind, RefKind, Snapshot, StashInfo};
 use git2::Oid;
 use graph::{Graph, GraphRow};
@@ -15,6 +17,7 @@ use rune::{
 use rune_kit::{Kit, Menu, MenuItem, Placement, TextArea, TextInput};
 use std::{
     borrow::Cow,
+    collections::VecDeque,
     path::{Path, PathBuf},
     rc::Rc,
     sync::mpsc,
@@ -82,6 +85,15 @@ struct DialogState {
     input: Option<TextEdit>,
 }
 
+/// A login question from git or ssh. It sits above everything else until it is answered.
+struct Login {
+    request: askpass::Request,
+    prompt: Prompt,
+    /// The user name, asked for together with the password on `Prompt::Username`.
+    user: TextEdit,
+    answer: TextEdit,
+}
+
 enum DetailData {
     Loading,
     Ready(Rc<CommitDetail>),
@@ -125,6 +137,8 @@ enum Msg {
         created: Result<String>,
         loaded: Result<Snapshot>,
     },
+    /// git or ssh wants a login; see `askpass`.
+    Askpass(askpass::Request),
 }
 
 struct GitBro {
@@ -140,6 +154,14 @@ struct GitBro {
     recent_open: bool,
     menu: Option<MenuTarget>,
     dialog: Option<DialogState>,
+    login: Option<Login>,
+    /// Prompts that arrived while `login` was open.
+    login_queue: VecDeque<askpass::Request>,
+    /// The password typed with the user name, for git's password prompt that comes next:
+    /// (host, password).
+    login_password: Option<(String, String)>,
+    /// The user cancelled a login during the running operation.
+    login_cancelled: bool,
     commit: TextEdit,
     /// The next commit replaces the last one instead of adding a new one.
     amend: bool,
@@ -180,6 +202,10 @@ fn init() -> GitBro {
         recent_open: false,
         menu: None,
         dialog: None,
+        login: None,
+        login_queue: VecDeque::new(),
+        login_password: None,
+        login_cancelled: false,
         commit: TextEdit::new(""),
         amend: false,
         amend_prefill: None,
@@ -198,6 +224,18 @@ fn init() -> GitBro {
 }
 
 fn setup(s: &mut GitBro, waker: Waker) {
+    let tx = s.tx.clone();
+    let wake = waker.clone();
+    let listening = askpass::listen(move |request| {
+        let _ = tx.send(Msg::Askpass(request));
+        wake();
+    })
+    .map_err(anyhow::Error::from)
+    .and_then(git::use_askpass);
+    // Without the dialog git still runs; a missing login then fails with a hint instead.
+    if let Err(err) = listening {
+        eprintln!("gitbro: sign-in dialog unavailable: {err:#}");
+    }
     s.waker = Some(waker);
     if let Some(path) = s.start.take() {
         s.reload(path, false);
@@ -351,6 +389,7 @@ impl GitBro {
             return;
         }
         self.set_status(Status::Busy(label.to_owned()));
+        self.login_cancelled = false;
         let tx = self.tx.clone();
         let waker = self.waker.clone();
         std::thread::spawn(move || {
@@ -768,6 +807,86 @@ impl GitBro {
         self.menu = None;
     }
 
+    /// Shows a login prompt from git or ssh, or queues it behind the one already open.
+    fn ask_login(&mut self, request: askpass::Request) {
+        if self.login.is_some() {
+            self.login_queue.push_back(request);
+            return;
+        }
+        let prompt = Prompt::parse(&request.prompt);
+        // The password was typed into the same dialog as the user name.
+        if let Prompt::Password { host, .. } = &prompt
+            && self
+                .login_password
+                .as_ref()
+                .is_some_and(|(for_host, _)| for_host == host)
+        {
+            let (_, password) = self.login_password.take().unwrap_or_default();
+            request.answer(Some(password));
+            return self.next_login();
+        }
+        let mut user = TextEdit::new("");
+        let mut answer = TextEdit::new("");
+        match prompt {
+            Prompt::Username { .. } => user.focused = true,
+            Prompt::TrustHost { .. } => {}
+            _ => answer.focused = true,
+        }
+        // The login owns the keyboard while it is open.
+        self.commit.focused = false;
+        if let Some(input) = self.dialog.as_mut().and_then(|d| d.input.as_mut()) {
+            input.focused = false;
+        }
+        self.menu = None;
+        self.recent_open = false;
+        self.login = Some(Login {
+            request,
+            prompt,
+            user,
+            answer,
+        });
+    }
+
+    fn next_login(&mut self) {
+        if let Some(request) = self.login_queue.pop_front() {
+            self.ask_login(request);
+        }
+    }
+
+    fn submit_login(&mut self) {
+        let Some(login) = self.login.take() else {
+            return;
+        };
+        let answer = match &login.prompt {
+            Prompt::Username { host } => {
+                let name = login.user.text.trim().to_owned();
+                if name.is_empty() {
+                    self.login = Some(login);
+                    return;
+                }
+                self.login_password = Some((host.clone(), login.answer.text.clone()));
+                name
+            }
+            Prompt::TrustHost { .. } => "yes".to_owned(),
+            _ => login.answer.text.clone(),
+        };
+        login.request.answer(Some(answer));
+        self.next_login();
+    }
+
+    /// Esc or Cancel: git gives up, and so does every prompt still waiting.
+    fn cancel_login(&mut self) {
+        let Some(login) = self.login.take() else {
+            return;
+        };
+        login.request.answer(None);
+        for request in self.login_queue.drain(..) {
+            request.answer(None);
+        }
+        self.login_password = None;
+        self.login_cancelled = true;
+    }
+
     fn head_name(&self) -> Option<&str> {
         self.snapshot.as_ref()?.head_branch.as_deref()
     }
@@ -819,7 +938,47 @@ fn dialog_field_key(s: &mut GitBro, ev: &KeyEvent, _tx: &mut Tx) -> bool {
     false
 }
 
+fn login_user(s: &mut GitBro) -> &mut TextEdit {
+    &mut s.login.as_mut().expect("an open login").user
+}
+
+fn login_answer(s: &mut GitBro) -> &mut TextEdit {
+    &mut s.login.as_mut().expect("an open login").answer
+}
+
+fn login_field_key(s: &mut GitBro, ev: &KeyEvent, _tx: &mut Tx) -> bool {
+    if ev.key == Key::Escape {
+        s.cancel_login();
+        return true;
+    }
+    false
+}
+
+/// Return in the user name field moves on to the password, unless that is filled in already.
+fn login_user_submit(s: &mut GitBro, _tx: &mut Tx) {
+    let Some(login) = &mut s.login else { return };
+    if login.answer.text.is_empty() && !login.user.text.trim().is_empty() {
+        login.user.focused = false;
+        login.answer.focused = true;
+    } else {
+        s.submit_login();
+    }
+}
+
 fn on_key(s: &mut GitBro, ev: &KeyEvent, tx: &mut Tx) -> bool {
+    if s.login.is_some() {
+        return match ev.key {
+            Key::Escape => {
+                s.cancel_login();
+                true
+            }
+            Key::Enter => {
+                s.submit_login();
+                true
+            }
+            _ => false,
+        };
+    }
     if ev.is_command('r') {
         s.recent_open = !s.recent_open;
         s.menu = None;
@@ -952,6 +1111,8 @@ fn handle(s: &mut GitBro, msg: Msg, _tx: &mut Tx) -> bool {
             result,
             loaded,
         } => {
+            let cancelled = std::mem::take(&mut s.login_cancelled);
+            s.login_password = None;
             if let Ok(snapshot) = loaded {
                 s.set_snapshot(snapshot);
                 s.reload_wip_detail();
@@ -960,6 +1121,12 @@ fn handle(s: &mut GitBro, msg: Msg, _tx: &mut Tx) -> bool {
             s.set_status(match result {
                 Ok(out) if out.is_empty() => Status::Done("Done".into()),
                 Ok(out) => Status::Done(out),
+                // git's own message would only say that no login was given.
+                Err(err) if cancelled => Status::Failed(if err.chain().count() > 1 {
+                    format!("{err}: sign-in cancelled.")
+                } else {
+                    "Sign-in cancelled.".into()
+                }),
                 Err(err) => Status::Failed(format!("{err:#}")),
             });
             if ok && let OpKind::Commit { amend } = kind {
@@ -981,6 +1148,10 @@ fn handle(s: &mut GitBro, msg: Msg, _tx: &mut Tx) -> bool {
                 }
                 (Err(err), _) | (_, Err(err)) => s.fail(format!("{err:#}")),
             }
+            true
+        }
+        Msg::Askpass(request) => {
+            s.ask_login(request);
             true
         }
     }
@@ -1026,6 +1197,9 @@ fn view(s: &GitBro, cx: &mut Cx<GitBro>) -> El {
     }
     if s.dialog.is_some() {
         dialog_view(s, k, t, &mut layers);
+    }
+    if s.login.is_some() {
+        login_view(s, k, t, &mut layers);
     }
     rune_kit::root(base, layers)
 }
@@ -2879,6 +3053,149 @@ fn dialog_view(s: &GitBro, k: &Kit, t: Theme, layers: &mut Vec<El>) {
     );
 }
 
+/// The login dialog for a git or ssh prompt. Unlike `dialog_view`, a press beside the card
+/// does not close it: that would cancel the operation behind it by accident.
+fn login_view(s: &GitBro, k: &Kit, t: Theme, layers: &mut Vec<El>) {
+    let Some(login) = &s.login else { return };
+    let github = |host: &str| host == "github.com";
+    let (title, note, confirm, ready) = match &login.prompt {
+        Prompt::Username { host } => (
+            format!("Sign in to {host}"),
+            format!(
+                "Git needs a login for {host} to continue. GitBro hands it to Git and keeps nothing.{}",
+                if github(host) {
+                    " GitHub takes a personal access token here, not your account password."
+                } else {
+                    ""
+                }
+            ),
+            "Sign in",
+            !login.user.text.trim().is_empty(),
+        ),
+        Prompt::Password { host, user } => (
+            format!("Sign in to {host}"),
+            format!(
+                "Git needs the password{} to continue.{}",
+                user.as_ref()
+                    .map(|u| format!(" for “{u}”"))
+                    .unwrap_or_default(),
+                if github(host) {
+                    " GitHub takes a personal access token here, not your account password."
+                } else {
+                    ""
+                }
+            ),
+            "Sign in",
+            true,
+        ),
+        Prompt::TrustHost { text } => (
+            "Trust this server?".to_owned(),
+            format!(
+                "{text}\n\nOnly trust it if the fingerprint is the one your Git host publishes."
+            ),
+            "Trust",
+            true,
+        ),
+        Prompt::Other { text, .. } => (
+            "Git needs an answer".to_owned(),
+            text.clone(),
+            "Continue",
+            true,
+        ),
+    };
+
+    let mut card = col()
+        .key("login-card")
+        .w_full()
+        .max_w(440.0)
+        .padding(16.0)
+        .gap(12.0)
+        .fill(t.c(t.surface))
+        .border(1.0, t.c(t.selected))
+        .shadow(8.0, 24.0, Color::BLACK.alpha(0.35))
+        .on_press(|_: &mut GitBro| {})
+        .child(text(title).font(bold(k.ty.ui)).color(t.c(t.text)))
+        .child(text(note).font(k.ty.ui).color(t.c(t.subtext)).wrap());
+    match &login.prompt {
+        Prompt::Username { .. } => {
+            card = card
+                .child(
+                    TextInput::new(&login.user)
+                        .width(None)
+                        .placeholder("User name")
+                        .on_edit(login_user)
+                        .on_submit(login_user_submit)
+                        .on_key(login_field_key)
+                        .build(k),
+                )
+                .child(
+                    TextInput::new(&login.answer)
+                        .width(None)
+                        .placeholder("Password or token")
+                        .secure()
+                        .on_edit(login_answer)
+                        .on_submit(|s: &mut GitBro, _tx: &mut Tx| s.submit_login())
+                        .on_key(login_field_key)
+                        .build(k),
+                );
+        }
+        Prompt::TrustHost { .. } => {}
+        prompt => {
+            let secret = match prompt {
+                Prompt::Other { secret, .. } => *secret,
+                _ => true,
+            };
+            let mut input = TextInput::new(&login.answer)
+                .width(None)
+                .placeholder(if secret {
+                    "Password or token"
+                } else {
+                    "Answer"
+                });
+            if secret {
+                input = input.secure();
+            }
+            card = card.child(
+                input
+                    .on_edit(login_answer)
+                    .on_submit(|s: &mut GitBro, _tx: &mut Tx| s.submit_login())
+                    .on_key(login_field_key)
+                    .build(k),
+            );
+        }
+    }
+
+    let cancel = tool_button(k, t, &ic::X, "Cancel", true, |s| s.cancel_login())
+        .h(30.0)
+        .border(1.0, t.c(t.border));
+    let mut confirm_button = primary_button(k, t, &ic::KEY, confirm, ready, t.c(t.accent));
+    if ready {
+        confirm_button = confirm_button
+            .default_button()
+            .on_press(|s: &mut GitBro| s.submit_login());
+    }
+    card = card.child(
+        row()
+            .justify_end()
+            .gap(8.0)
+            .w_full()
+            .child(cancel)
+            .child(confirm_button),
+    );
+
+    layers.push(
+        el().key("login-layer")
+            .absolute(0.0, 0.0)
+            .w_full()
+            .h_full()
+            .padding(16.0)
+            .center()
+            .fill(Color::BLACK.alpha(0.53))
+            .modal(false, |s: &mut GitBro| s.cancel_login())
+            .child(card),
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Status bar
 // ---------------------------------------------------------------------------
@@ -3031,6 +3348,8 @@ fn mono_family() -> &'static str {
 }
 
 fn main() {
+    // git and ssh start this binary to ask for a login; see `askpass`.
+    askpass::run_if_helper();
     rune::set_app_id("gitbro");
     rune::App::new(AppSpec::<GitBro> {
         families: ("Inter", mono_family()),

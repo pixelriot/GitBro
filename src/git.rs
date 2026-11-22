@@ -6,6 +6,7 @@ use git2::{
 use std::{
     path::{Path, PathBuf},
     process::{Command, Stdio},
+    sync::OnceLock,
 };
 
 /// Upper bound for the commits shown in the graph, keeps huge repos responsive.
@@ -479,26 +480,115 @@ fn load_wip(repo: &Repository) -> Result<CommitDetail> {
     })
 }
 
+/// GitBro's own binary and the socket of its sign-in dialog; see `askpass`.
+struct Askpass {
+    exe: PathBuf,
+    socket: PathBuf,
+}
+
+static ASKPASS: OnceLock<Askpass> = OnceLock::new();
+
+/// Routes the login prompts of every later git and ssh run to the window behind `socket`.
+pub fn use_askpass(socket: PathBuf) -> Result<()> {
+    let exe = std::env::current_exe().context("could not find the GitBro binary")?;
+    let _ = ASKPASS.set(Askpass { exe, socket });
+    Ok(())
+}
+
 /// Runs `git` in `path` and returns its combined output. Never prompts on the terminal
-/// or opens an editor, so a missing credential fails instead of hanging.
+/// or opens an editor, so a missing credential fails instead of hanging. Logins are asked
+/// for in GitBro's own dialog once `use_askpass` has run.
 fn run(path: &Path, args: &[&str]) -> Result<String> {
-    let out = Command::new("git")
-        .arg("-C")
+    let mut cmd = Command::new("git");
+    cmd.arg("-C")
         .arg(path)
         .args(args)
         .env("GIT_TERMINAL_PROMPT", "0")
         .env("GIT_EDITOR", "true")
-        .stdin(Stdio::null())
-        .output()
-        .context("could not start git")?;
+        .stdin(Stdio::null());
+    if let Some(askpass) = ASKPASS.get() {
+        cmd.env("GIT_ASKPASS", &askpass.exe)
+            .env("SSH_ASKPASS", &askpass.exe)
+            // Without a display check or a terminal fallback: ssh always asks through GitBro.
+            .env("SSH_ASKPASS_REQUIRE", "force")
+            .env(crate::askpass::SOCKET_ENV, &askpass.socket);
+    }
+    let out = cmd.output().context("could not start git")?;
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
     let text = text.trim().to_owned();
     if !out.status.success() {
-        let name = args.iter().find(|a| !a.starts_with('-')).unwrap_or(&args[0]);
-        bail!("{}", if text.is_empty() { format!("git {name} fehlgeschlagen") } else { text });
+        let name = args
+            .iter()
+            .find(|a| !a.starts_with('-'))
+            .unwrap_or(&args[0]);
+        if text.is_empty() {
+            bail!("git {name} failed");
+        }
+        match explain_auth_failure(&text) {
+            // The status bar shows the first line; git's own output stays below it.
+            Some(hint) => bail!("{hint}\n\n{text}"),
+            None => bail!("{text}"),
+        }
     }
     Ok(text)
+}
+
+/// Turns git's terse sign-in failures into a sentence that says what is wrong and what to do.
+///
+/// Without a credential helper and with the sign-in dialog unavailable, git fails with
+/// messages like "terminal prompts disabled" that read like a GitBro bug.
+fn explain_auth_failure(output: &str) -> Option<String> {
+    // git quotes the remote URL, e.g. "for 'https://github.com'"; keep just the host.
+    let host = output
+        .split('\'')
+        .find_map(|part| {
+            part.strip_prefix("https://")
+                .or_else(|| part.strip_prefix("http://"))
+        })
+        .map(|rest| {
+            rest.split(['/', '@'])
+                .find(|s| s.contains('.'))
+                .unwrap_or(rest)
+        })
+        .unwrap_or("the remote")
+        .to_owned();
+    let gh_tip = if host == "github.com" {
+        " For GitHub, run `gh auth login` in a terminal."
+    } else {
+        ""
+    };
+    let has = |needle: &str| output.contains(needle);
+
+    if has("could not read Username") || has("could not read Password") {
+        return Some(format!(
+            "Not signed in to {host}: no saved login was found. \
+             Sign in when GitBro asks, or set up a Git credential helper.{gh_tip}"
+        ));
+    }
+    if has("Authentication failed")
+        || has("Invalid username or password")
+        || has("HTTP Basic: Access denied")
+    {
+        return Some(format!(
+            "{host} rejected the saved login; it may have expired. Sign in again.{gh_tip}"
+        ));
+    }
+    if has("Permission denied (publickey") {
+        return Some(
+            "The server rejected your SSH key. Check that the key is loaded (`ssh-add -l`) \
+             and added to your account."
+                .into(),
+        );
+    }
+    if has("Host key verification failed") {
+        return Some(
+            "The server's SSH host key is not trusted yet. Connect once from a terminal \
+             (e.g. `ssh -T git@github.com`) and accept it."
+                .into(),
+        );
+    }
+    None
 }
 
 /// Fetches all remotes and fast-forwards the current branch to its upstream.
@@ -787,6 +877,27 @@ mod tests {
         sh(dir, &["config", "user.name", "T"]);
         sh(dir, &["config", "user.email", "t@t"]);
         commit(dir, "a.txt", "1\n");
+    }
+
+    #[test]
+    fn auth_failures_get_a_readable_hint() {
+        let missing = explain_auth_failure(
+            "fatal: could not read Username for 'https://github.com': terminal prompts disabled",
+        )
+        .unwrap();
+        assert!(missing.starts_with("Not signed in to github.com"));
+        assert!(missing.contains("gh auth login"));
+
+        let rejected = explain_auth_failure(
+            "remote: Invalid username or password.\n\
+             fatal: Authentication failed for 'https://user@gitlab.example.com/a/b.git/'",
+        )
+        .unwrap();
+        assert!(rejected.starts_with("gitlab.example.com rejected"));
+        assert!(!rejected.contains("gh auth"));
+
+        assert!(explain_auth_failure("git@github.com: Permission denied (publickey).").is_some());
+        assert!(explain_auth_failure("fatal: not a git repository").is_none());
     }
 
     #[test]
