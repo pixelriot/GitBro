@@ -155,6 +155,7 @@ struct GitBro {
     menu: Option<MenuTarget>,
     dialog: Option<DialogState>,
     login: Option<Login>,
+    about_open: bool,
     /// Prompts that arrived while `login` was open.
     login_queue: VecDeque<askpass::Request>,
     /// The password typed with the user name, for git's password prompt that comes next:
@@ -203,6 +204,7 @@ fn init() -> GitBro {
         menu: None,
         dialog: None,
         login: None,
+        about_open: false,
         login_queue: VecDeque::new(),
         login_password: None,
         login_cancelled: false,
@@ -715,6 +717,10 @@ impl GitBro {
     }
 
     fn open_selected(&mut self, tx: &mut Tx) {
+        if self.about_open {
+            self.about_open = false;
+            return;
+        }
         if self.dialog.is_some() {
             return self.confirm_dialog();
         }
@@ -775,6 +781,10 @@ impl GitBro {
 
     /// Esc: closes a dialog or menu first, then the status details, then the diff view.
     fn close_detail(&mut self, tx: &mut Tx) {
+        if self.about_open {
+            self.about_open = false;
+            return;
+        }
         if self.dialog.is_some() {
             return self.close_dialog();
         }
@@ -1197,6 +1207,9 @@ fn view(s: &GitBro, cx: &mut Cx<GitBro>) -> El {
     }
     if s.dialog.is_some() {
         dialog_view(s, k, t, &mut layers);
+    }
+    if s.about_open {
+        about_view(k, t, &mut layers);
     }
     if s.login.is_some() {
         login_view(s, k, t, &mut layers);
@@ -2915,6 +2928,25 @@ fn recent_menu(s: &GitBro, k: &Kit, t: Theme, layers: &mut Vec<El>) {
                     .color(t.c(t.text)),
             ),
     );
+    panel = panel.child(
+        row()
+            .h(30.0)
+            .px(12.0)
+            .gap(8.0)
+            .items_center()
+            .cursor(Cursor::Pointer)
+            .hover(t.c(t.selected))
+            .on_press(|s: &mut GitBro| {
+                s.close_menus();
+                s.about_open = true;
+            })
+            .child(icon(&ic::BRANCH, 14.0).color(t.c(t.text)))
+            .child(
+                text("About GitBro")
+                    .font(k.ty.ui_compact)
+                    .color(t.c(t.text)),
+            ),
+    );
     layers.push(panel.modal(true, |s: &mut GitBro| s.close_menus()));
 }
 
@@ -3049,6 +3081,77 @@ fn dialog_view(s: &GitBro, k: &Kit, t: Theme, layers: &mut Vec<El>) {
             .fill(Color::BLACK.alpha(0.53))
             .on_press(|s: &mut GitBro| s.close_dialog())
             .modal(false, |s: &mut GitBro| s.close_dialog())
+            .child(card),
+    );
+}
+
+/// Name, version, what GitBro is for, and where it lives; all of it from `Cargo.toml`.
+fn about_view(k: &Kit, t: Theme, layers: &mut Vec<El>) {
+    const REPOSITORY: &str = env!("CARGO_PKG_REPOSITORY");
+    let line = |value: String| text(value).font(k.ty.ui).color(t.c(t.subtext)).wrap();
+    let card = col()
+        .key("about-card")
+        .w_full()
+        .max_w(400.0)
+        .padding(20.0)
+        .gap(10.0)
+        .items_center()
+        .fill(t.c(t.surface))
+        .border(1.0, t.c(t.selected))
+        .shadow(8.0, 24.0, Color::BLACK.alpha(0.35))
+        .on_press(|_: &mut GitBro| {})
+        .child(icon(&ic::BRANCH, 36.0).color(t.c(t.accent)))
+        .child(
+            row()
+                .gap(8.0)
+                .items_center()
+                .child(
+                    text("GitBro")
+                        .font(TextStyle {
+                            size: 18.0,
+                            weight: 700.0,
+                            ..k.ty.ui
+                        })
+                        .color(t.c(t.text)),
+                )
+                .child(
+                    text(format!("v{}", env!("CARGO_PKG_VERSION")))
+                        .font(k.ty.ui)
+                        .color(t.c(t.subtext)),
+                ),
+        )
+        .child(line(format!("{}.", env!("CARGO_PKG_DESCRIPTION"))))
+        .child(line(format!(
+            "Built with Rune · {} license",
+            env!("CARGO_PKG_LICENSE")
+        )))
+        .child(
+            row()
+                .mt(6.0)
+                .gap(8.0)
+                .child(
+                    tool_button(k, t, &ic::X, "Close", true, |s| s.about_open = false)
+                        .h(30.0)
+                        .border(1.0, t.c(t.border)),
+                )
+                .child(
+                    primary_button(k, t, &ic::CLOUD, "GitHub", true, t.c(t.accent)).on_press_tx(
+                        |_: &mut GitBro, tx: &mut Tx| {
+                            let _ = tx.open_url(REPOSITORY);
+                        },
+                    ),
+                ),
+        );
+    layers.push(
+        el().key("about-layer")
+            .absolute(0.0, 0.0)
+            .w_full()
+            .h_full()
+            .padding(16.0)
+            .center()
+            .fill(Color::BLACK.alpha(0.53))
+            .on_press(|s: &mut GitBro| s.about_open = false)
+            .modal(false, |s: &mut GitBro| s.about_open = false)
             .child(card),
     );
 }
