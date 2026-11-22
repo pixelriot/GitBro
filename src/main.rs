@@ -1,4 +1,5 @@
 mod askpass;
+mod fx;
 mod git;
 mod graph;
 mod icons;
@@ -11,8 +12,8 @@ use git2::Oid;
 use graph::{Graph, GraphRow};
 use icons as ic;
 use rune::{
-    Align, AppSpec, Color, Cursor, Cx, El, GrowthSpec, Key, KeyEvent, LineCap, Path as DrawPath,
-    ScrollSpec, Shape, TextEdit, TextStyle, Tx, Waker, canvas, col, el, icon, row, text,
+    Align, AppSpec, Color, Cursor, Cx, El, GrowthSpec, Key, KeyEvent, ScrollSpec, Shape, TextEdit,
+    TextStyle, Transition, Tx, Waker, canvas, col, el, icon, row, text,
 };
 use rune_kit::{Kit, Menu, MenuItem, Placement, TextArea, TextInput};
 use std::{
@@ -28,7 +29,8 @@ use theme::Theme;
 const ROW_H: f32 = 28.0;
 const LANE_W: f32 = 16.0;
 const GRAPH_PAD: f32 = 10.0;
-const NODE_R: f32 = 4.5;
+const NODE: f32 = 6.0;
+const BAR: f32 = 2.0;
 const SIDEBAR_W: f32 = 240.0;
 const FILES_SIDEBAR_W: f32 = 320.0;
 const BRANCH_MENU_W: f32 = 200.0;
@@ -110,7 +112,11 @@ struct DetailView {
 #[derive(Clone, Copy, PartialEq)]
 enum OpKind {
     Plain,
-    Commit { amend: bool },
+    Commit {
+        amend: bool,
+    },
+    /// Toolbar Push. The push that follows a commit stays `Plain`, so it does not burst twice.
+    Push,
 }
 
 /// Results of work done on background threads.
@@ -141,7 +147,7 @@ enum Msg {
     Askpass(askpass::Request),
 }
 
-struct GitBro {
+pub(crate) struct GitBro {
     snapshot: Option<Snapshot>,
     graph: Graph,
     selected: Option<Oid>,
@@ -182,6 +188,16 @@ struct GitBro {
     diff_epoch: u64,
     /// Bumped whenever commit row keys can change.
     history_version: u64,
+    /// Pixel burst after a commit lands. `t0` is NaN until the next poll stamps it.
+    burst: Option<Burst>,
+    burst_seed: u32,
+    /// Clock from the latest poll, so the burst can place its pixels.
+    now: f64,
+}
+
+pub(crate) struct Burst {
+    t0: f64,
+    seed: u32,
 }
 
 fn init() -> GitBro {
@@ -222,6 +238,9 @@ fn init() -> GitBro {
         detail_epoch: 0,
         diff_epoch: 0,
         history_version: 0,
+        burst: None,
+        burst_seed: 1,
+        now: 0.0,
     }
 }
 
@@ -247,6 +266,19 @@ fn setup(s: &mut GitBro, waker: Waker) {
 impl GitBro {
     fn path(&self) -> Option<PathBuf> {
         self.snapshot.as_ref().map(|s| s.path.clone())
+    }
+
+    pub(crate) fn fx_theme(&self) -> Theme {
+        self.theme
+    }
+
+    /// Starts the pixel burst on the next poll. A burst already in flight restarts.
+    fn arm_burst(&mut self) {
+        self.burst = Some(Burst {
+            t0: f64::NAN,
+            seed: self.burst_seed,
+        });
+        self.burst_seed = self.burst_seed.wrapping_add(1);
     }
 
     fn busy(&self) -> bool {
@@ -655,6 +687,8 @@ impl GitBro {
         if self.detail.as_ref().is_some_and(|d| d.oid == oid) {
             return;
         }
+        // The history and the diff swap in one frame. Rune's default entrance slides a new pane in.
+        tx.instant();
         if oid != git::wip_oid() {
             self.end_amend();
             self.commit.focused = false;
@@ -797,6 +831,7 @@ impl GitBro {
             self.detail = None;
             self.end_amend();
             self.commit.focused = false;
+            tx.instant();
             if let Some(ix) = self.selected.and_then(|oid| self.commit_index(oid))
                 && let Some(commit) = self.snapshot.as_ref().and_then(|s| s.commits.get(ix))
             {
@@ -1055,10 +1090,26 @@ fn poll(s: &mut GitBro, time: f64, tx: &mut Tx) -> bool {
         s.end_amend();
         changed = true;
     }
+    if s.burst.is_some() {
+        let t0 = {
+            let burst = s.burst.as_mut().unwrap();
+            if !burst.t0.is_finite() {
+                burst.t0 = time;
+            }
+            burst.t0
+        };
+        s.now = time;
+        if time < t0 + fx::BURST_LIFE {
+            tx.wake_after(Duration::from_millis(16));
+        } else {
+            s.burst = None;
+        }
+        changed = true;
+    }
     changed
 }
 
-fn handle(s: &mut GitBro, msg: Msg, _tx: &mut Tx) -> bool {
+fn handle(s: &mut GitBro, msg: Msg, tx: &mut Tx) -> bool {
     match msg {
         Msg::Loaded { quiet, result } => match result {
             Ok(snapshot) => {
@@ -1096,6 +1147,8 @@ fn handle(s: &mut GitBro, msg: Msg, _tx: &mut Tx) -> bool {
                 Ok(detail) => DetailData::Ready(Rc::new(detail)),
                 Err(err) => DetailData::Failed(format!("{err:#}")),
             };
+            // The commit panel mounts with this message. Land it in place.
+            tx.instant();
             true
         }
         Msg::WipDetail { current, result } => {
@@ -1114,6 +1167,7 @@ fn handle(s: &mut GitBro, msg: Msg, _tx: &mut Tx) -> bool {
             if bump {
                 s.diff_epoch += 1;
             }
+            tx.instant();
             true
         }
         Msg::Op {
@@ -1143,10 +1197,16 @@ fn handle(s: &mut GitBro, msg: Msg, _tx: &mut Tx) -> bool {
                 s.commit.clear();
                 s.amend = false;
                 s.amend_prefill = None;
+                s.arm_burst();
+                // The working-tree view closes in this same update. Don't slide the history back in.
+                tx.instant();
                 // A rewritten commit that is already on the remote can only be replaced there.
                 s.run("Pushing…", OpKind::Plain, move |p| {
                     git::push(p, amend).context("The commit was created, but the push failed")
                 });
+            }
+            if ok && matches!(kind, OpKind::Push) {
+                s.arm_burst();
             }
             true
         }
@@ -1214,7 +1274,16 @@ fn view(s: &GitBro, cx: &mut Cx<GitBro>) -> El {
     if s.login.is_some() {
         login_view(s, k, t, &mut layers);
     }
+    if let Some(burst) = commit_burst(s, cx, t) {
+        layers.push(burst);
+    }
     rune_kit::root(base, layers)
+}
+
+/// The empty field behind the history, welcome and "not a repository" screens.
+fn field(el: El) -> El {
+    // No entrance fade: the dither should be there, not fly in with the pane.
+    el.effect(fx::FIELD).transition(Transition::none())
 }
 
 // ---------------------------------------------------------------------------
@@ -1493,7 +1562,7 @@ fn toolbar(s: &GitBro, k: &Kit, t: Theme) -> El {
         pull = pull.child(count_badge(k, format!("↓{behind}"), t.c(t.accent)));
     }
     let mut push = tool_button(k, t, &ic::PUSH, "Push", has_repo && !busy, |s| {
-        s.run("Push…", OpKind::Plain, move |p| git::push(p, false))
+        s.run("Push…", OpKind::Push, move |p| git::push(p, false))
     });
     if ahead > 0 {
         push = push.child(count_badge(k, format!("↑{ahead}"), t.c(t.yellow)));
@@ -1597,6 +1666,7 @@ fn branch_sidebar(s: &GitBro, k: &Kit, t: Theme, layers: &mut Vec<El>) -> El {
         .min_w(SIDEBAR_W)
         .h_full()
         .fill(t.c(t.surface))
+        .transition(Transition::none())
         .child(
             col()
                 .key("sidebar-scroll")
@@ -1894,10 +1964,10 @@ fn stash_item(s: &GitBro, k: &Kit, t: Theme, stash: &StashInfo, layers: &mut Vec
 
 fn history(s: &GitBro, cx: &mut Cx<GitBro>, k: &Kit, t: Theme) -> El {
     if let Some(dir) = &s.no_repo {
-        return init_prompt(k, t, dir.clone(), s.busy());
+        return field(init_prompt(k, t, dir.clone(), s.busy()));
     }
     let Some(snapshot) = &s.snapshot else {
-        return welcome(s, k, t);
+        return field(welcome(s, k, t));
     };
 
     let (show_author, show_date) = cx
@@ -2075,11 +2145,7 @@ fn history_row(
         .items_center()
         .pr(12.0)
         .cursor(Cursor::Pointer)
-        .fill(if selected {
-            t.c(t.selected)
-        } else {
-            Color::TRANSPARENT
-        })
+        .fill(if selected { t.c(t.selected) } else { t.c(t.bg) })
         .hover(t.c(t.border))
         .on_press_tx(move |s: &mut GitBro, tx: &mut Tx| {
             if let Some(ix) = s.commit_index(oid) {
@@ -2128,46 +2194,234 @@ fn graph_shape(t: Theme, row: &GraphRow, wip: bool) -> Shape {
     let mid = ROW_H / 2.0;
     let bottom = ROW_H;
     let node_x = lane_x(row.lane);
+    let node = [node_x, mid];
 
     for &(lane, c) in &row.through {
-        let x = lane_x(lane);
-        shape = shape.line([x, top], [x, bottom], 2.0, LineCap::Butt, t.lane(c));
+        shape = vbar(shape, lane_x(lane), top, bottom, t.lane(c));
     }
     for &(lane, c) in &row.incoming {
-        let x = lane_x(lane);
-        if lane != row.lane {
-            let path = DrawPath::new()
-                .move_to([x, top])
-                .quad_to([x, mid], [node_x, mid]);
-            shape = shape.stroke_path(&path, 2.0, LineCap::Butt, t.lane(c));
+        let color = t.lane(c);
+        let from = [lane_x(lane), top];
+        shape = if lane == row.lane {
+            vbar(shape, from[0], from[1], mid, color)
         } else {
-            shape = shape.line([x, top], [node_x, mid], 2.0, LineCap::Butt, t.lane(c));
-        }
+            elbow_into(shape, from, node, color)
+        };
     }
     for &(lane, c) in &row.outgoing {
-        let x = lane_x(lane);
-        if lane != row.lane {
-            let path = DrawPath::new()
-                .move_to([node_x, mid])
-                .quad_to([x, mid], [x, bottom]);
-            shape = shape.stroke_path(&path, 2.0, LineCap::Butt, t.lane(c));
+        let color = t.lane(c);
+        let to = [lane_x(lane), bottom];
+        shape = if lane == row.lane {
+            vbar(shape, node_x, mid, bottom, color)
         } else {
-            shape = shape.line([node_x, mid], [x, bottom], 2.0, LineCap::Butt, t.lane(c));
+            elbow_out(shape, node, to, color)
+        };
+    }
+
+    let color = t.lane(row.color);
+    let x = (node_x - NODE / 2.0).round();
+    let y = (mid - NODE / 2.0).round();
+    if wip {
+        shape = px(shape, x, y, NODE, BAR, color);
+        shape = px(shape, x, y + NODE - BAR, NODE, BAR, color);
+        shape = px(shape, x, y, BAR, NODE, color);
+        px(shape, x + NODE - BAR, y, BAR, NODE, color)
+    } else {
+        shape = px(shape, x, y, NODE, NODE, color);
+        px(shape, x, y, BAR, BAR, color.mix(Color::WHITE, 0.55))
+    }
+}
+
+fn px(shape: Shape, x: f32, y: f32, w: f32, h: f32, color: Color) -> Shape {
+    if w < 1.0 || h < 1.0 {
+        return shape;
+    }
+    shape.fill([[x, y], [x + w, y], [x + w, y + h], [x, y + h]], color)
+}
+
+fn vbar(shape: Shape, cx: f32, y0: f32, y1: f32, color: Color) -> Shape {
+    let (y0, y1) = if y0 <= y1 { (y0, y1) } else { (y1, y0) };
+    let y = y0.round();
+    px(
+        shape,
+        (cx - BAR / 2.0).round(),
+        y,
+        BAR,
+        (y1.round() - y).max(BAR),
+        color,
+    )
+}
+
+fn hbar(shape: Shape, x0: f32, x1: f32, cy: f32, color: Color) -> Shape {
+    let (x0, x1) = if x0 <= x1 { (x0, x1) } else { (x1, x0) };
+    let x = x0.round();
+    px(
+        shape,
+        x,
+        (cy - BAR / 2.0).round(),
+        (x1.round() - x).max(BAR),
+        BAR,
+        color,
+    )
+}
+
+/// Side lane into the node: down, then across.
+fn elbow_into(shape: Shape, from: [f32; 2], to: [f32; 2], color: Color) -> Shape {
+    let shape = vbar(shape, from[0], from[1], to[1], color);
+    hbar(shape, from[0], to[0], to[1], color)
+}
+
+/// Node out to a side lane: across, then down.
+fn elbow_out(shape: Shape, from: [f32; 2], to: [f32; 2], color: Color) -> Shape {
+    let shape = hbar(shape, from[0], to[0], from[1], color);
+    vbar(shape, to[0], from[1], to[1], color)
+}
+
+/// A fountain of chunky pixels over the history (or the diff, if that is what's open).
+fn commit_burst(s: &GitBro, cx: &mut Cx<GitBro>, t: Theme) -> Option<El> {
+    let burst = s.burst.as_ref()?;
+    if !burst.t0.is_finite() {
+        return None;
+    }
+    let age = (s.now - burst.t0) as f32;
+    if age < 0.0 || age > fx::BURST_LIFE as f32 {
+        return None;
+    }
+    let on_history = cx.window_layout("history-pane").is_some();
+    let pane = cx
+        .window_layout("history-pane")
+        .or_else(|| cx.window_layout("diff-pane"))?;
+    let head = s.snapshot.as_ref().and_then(|snap| {
+        snap.commits
+            .iter()
+            .enumerate()
+            .find(|(_, c)| !c.wip && c.refs.iter().any(|r| r.is_head))
+            .map(|(ix, c)| {
+                let lane = s.graph.rows.get(ix).map_or(0, |r| r.lane);
+                (c.oid, lane)
+            })
+    });
+    let mut origin = [pane[0] + GRAPH_PAD + LANE_W * 0.5, pane[1] + ROW_H * 0.5];
+    if on_history
+        && let Some((oid, lane)) = head
+        && let Some(row) = cx.window_layout(&format!("commit-row-{oid}"))
+    {
+        let y = row[1] + ROW_H * 0.5;
+        if y >= pane[1] && y <= pane[1] + pane[3] {
+            origin = [row[0] + GRAPH_PAD + LANE_W * lane as f32 + LANE_W * 0.5, y];
+        }
+    }
+    let local = [origin[0] - pane[0], origin[1] - pane[1]];
+    Some(
+        el().key("commit-burst")
+            .inert()
+            .absolute(pane[0], pane[1])
+            .size(pane[2], pane[3])
+            .clip_rounded(0.0)
+            .transition(Transition::none())
+            .child(
+                canvas(burst_pixels(t, age, burst.seed, local, [pane[2], pane[3]]))
+                    .size(pane[2], pane[3]),
+            ),
+    )
+}
+
+/// Big pixels over the whole pane. A ring leaves the commit, then confetti keeps
+/// falling through the list so the party stays on screen.
+fn burst_pixels(t: Theme, age: f32, seed: u32, origin: [f32; 2], pane: [f32; 2]) -> Shape {
+    let life = fx::BURST_LIFE as f32;
+    let colors = [
+        Color::WHITE,
+        t.c(t.text),
+        t.c(t.accent).mix(Color::WHITE, 0.75),
+        t.lane(5).mix(Color::WHITE, 0.6),
+        t.c(t.accent),
+        t.lane(5),
+        t.c(t.text).mix(Color::WHITE, 0.35),
+        t.lane(0).mix(Color::WHITE, 0.4),
+    ];
+    let mut shape = Shape::new();
+
+    if age < 0.16 {
+        let s = 40.0;
+        shape = px(
+            shape,
+            snap4(origin[0] - s * 0.5),
+            snap4(origin[1] - s * 0.5),
+            s,
+            s,
+            Color::WHITE,
+        );
+    }
+
+    let reach = pane[0].hypot(pane[1]);
+    for wave in 0..2u32 {
+        let local = age - wave as f32 * 0.08;
+        if local <= 0.0 {
+            continue;
+        }
+        let k = (local / 0.42).min(1.0);
+        let radius = 24.0 + k * reach * (0.55 + wave as f32 * 0.2);
+        let fade = if k < 0.7 { 1.0 } else { (1.0 - k) / 0.3 };
+        if fade <= 0.05 {
+            continue;
+        }
+        for i in 0..(28 + wave * 10) {
+            let ang = (i as f32 / (28.0 + wave as f32 * 10.0)) * std::f32::consts::TAU
+                + wave as f32 * 0.2;
+            let size = if i % 5 == 0 { 28.0 } else { 16.0 };
+            let x = snap4(origin[0] + radius * ang.cos() - size * 0.5);
+            let y = snap4(origin[1] + radius * ang.sin() - size * 0.5);
+            let color = colors[(i as usize + wave as usize) % colors.len()].alpha(fade);
+            shape = px(shape, x, y, size, size, color);
         }
     }
 
-    let r = NODE_R;
-    let points = [
-        [node_x - r, mid - r],
-        [node_x + r, mid - r],
-        [node_x + r, mid + r],
-        [node_x - r, mid + r],
-    ];
-    if wip {
-        shape.stroke_with(points, true, 2.0, LineCap::Butt, t.lane(row.color))
-    } else {
-        shape.fill(points, t.lane(row.color))
+    for i in 0..160u32 {
+        let delay = hash01(seed, i) * 0.42;
+        let local = age - delay;
+        if local <= 0.0 {
+            continue;
+        }
+        let span = (life - delay).max(0.2);
+        let k = (local / span).min(1.0);
+        let roll = hash01(seed, i.wrapping_add(17));
+        let (w, h) = if roll > 0.92 {
+            (48.0, 20.0)
+        } else if roll > 0.78 {
+            (36.0, 36.0)
+        } else if roll > 0.5 {
+            (28.0, 28.0)
+        } else {
+            (20.0, 20.0)
+        };
+        let x0 = hash01(seed, i.wrapping_add(3)) * (pane[0] - w).max(0.0);
+        let drift = (hash01(seed, i.wrapping_add(11)) - 0.5) * 140.0;
+        let speed = 380.0 + hash01(seed, i.wrapping_add(80)) * 720.0;
+        let x = snap4(x0 + drift * local);
+        let y = snap4(-h - 8.0 + speed * local);
+        let fade = if k < 0.82 { 1.0 } else { (1.0 - k) / 0.18 };
+        if fade <= 0.05 {
+            continue;
+        }
+        let color = colors[i as usize % colors.len()].alpha(fade);
+        shape = px(shape, x, y, w, h, color);
     }
+    shape
+}
+
+fn snap4(v: f32) -> f32 {
+    (v / 4.0).round() * 4.0
+}
+
+fn hash01(seed: u32, i: u32) -> f32 {
+    let mut x = seed
+        .wrapping_mul(747796405)
+        .wrapping_add(i.wrapping_mul(2_891_336_453));
+    x = (x ^ (x >> 16)).wrapping_mul(0x7feb352d);
+    x = (x ^ (x >> 15)).wrapping_mul(0x846ca68b);
+    x ^= x >> 16;
+    (x & 0x00ff_ffff) as f32 / 16_777_216.0
 }
 
 fn init_prompt(k: &Kit, t: Theme, dir: PathBuf, busy: bool) -> El {
@@ -2207,9 +2461,16 @@ fn init_prompt(k: &Kit, t: Theme, dir: PathBuf, busy: bool) -> El {
                 .color(t.c(t.subtext)),
         )
         .child(
-            tool_button_accent(k, t, &ic::BRANCH, "Create Git repository", !busy, move |s| {
-                s.init_repo(target.clone());
-            })
+            tool_button_accent(
+                k,
+                t,
+                &ic::BRANCH,
+                "Create Git repository",
+                !busy,
+                move |s| {
+                    s.init_repo(target.clone());
+                },
+            )
             .h(32.0)
             .px(12.0)
             .border(1.0, t.c(t.accent)),
@@ -2296,6 +2557,7 @@ fn files_sidebar(s: &GitBro, k: &Kit, t: Theme) -> El {
         .min_w(FILES_SIDEBAR_W)
         .h_full()
         .fill(t.c(t.surface))
+        .transition(Transition::none())
         .child(
             col()
                 .grow(1.0)
@@ -2577,7 +2839,11 @@ fn commit_panel(s: &GitBro, k: &Kit, t: Theme, d: &Rc<CommitDetail>) -> El {
             ),
     );
 
-    col().w_full().child(separator(t)).child(content)
+    col()
+        .w_full()
+        .transition(Transition::none())
+        .child(separator(t))
+        .child(content)
 }
 
 // ---------------------------------------------------------------------------
@@ -2652,6 +2918,7 @@ fn diff_view(s: &GitBro, cx: &mut Cx<GitBro>, k: &Kit, t: Theme) -> El {
         .grow(1.0)
         .min_w(0.0)
         .min_h(0.0)
+        .transition(Transition::none())
         .child(title_bar)
         .child(body)
 }
@@ -3462,5 +3729,6 @@ fn main() {
         ..AppSpec::new("GitBro", (1280.0, 800.0), init, view)
     })
     .on_focus(on_focus)
+    .compositor(fx::Gfx::default())
     .run();
 }

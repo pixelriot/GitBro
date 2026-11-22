@@ -97,11 +97,18 @@ pub fn load(path: &Path) -> Result<Snapshot> {
         Err(err) => return Err(anyhow::Error::new(err).context("No Git repository found")),
     };
     // `workdir()` ends in a slash; strip it so the path compares equal to what a user picks.
-    let workdir: PathBuf = repo.workdir().unwrap_or_else(|| repo.path()).components().collect();
+    let workdir: PathBuf = repo
+        .workdir()
+        .unwrap_or_else(|| repo.path())
+        .components()
+        .collect();
 
     let mut stashes = Vec::new();
     let _ = repo.stash_foreach(|index, message, _| {
-        stashes.push(StashInfo { index, message: message.to_owned() });
+        stashes.push(StashInfo {
+            index,
+            message: message.to_owned(),
+        });
         true
     });
 
@@ -146,7 +153,14 @@ pub fn load(path: &Path) -> Result<Snapshot> {
                 .unwrap_or((0, 0)),
             _ => (0, 0),
         };
-        let info = BranchInfo { name: name.clone(), tip: commit.id(), is_head, ahead, behind, upstream };
+        let info = BranchInfo {
+            name: name.clone(),
+            tip: commit.id(),
+            is_head,
+            ahead,
+            behind,
+            upstream,
+        };
         let ref_kind = match kind {
             BranchType::Local => {
                 local.push(info);
@@ -157,7 +171,14 @@ pub fn load(path: &Path) -> Result<Snapshot> {
                 RefKind::Remote
             }
         };
-        labels.push((commit.id(), RefLabel { name, kind: ref_kind, is_head }));
+        labels.push((
+            commit.id(),
+            RefLabel {
+                name,
+                kind: ref_kind,
+                is_head,
+            },
+        ));
     }
     local.sort_by(|a, b| b.is_head.cmp(&a.is_head).then_with(|| a.name.cmp(&b.name)));
     remote.sort_by(|a, b| a.name.cmp(&b.name));
@@ -168,14 +189,25 @@ pub fn load(path: &Path) -> Result<Snapshot> {
         {
             labels.push((
                 commit.id(),
-                RefLabel { name: name.to_owned(), kind: RefKind::Tag, is_head: false },
+                RefLabel {
+                    name: name.to_owned(),
+                    kind: RefKind::Tag,
+                    is_head: false,
+                },
             ));
         }
     }
     if head_branch.is_none()
         && let Some(oid) = head_oid
     {
-        labels.push((oid, RefLabel { name: "HEAD".into(), kind: RefKind::Head, is_head: true }));
+        labels.push((
+            oid,
+            RefLabel {
+                name: "HEAD".into(),
+                kind: RefKind::Head,
+                is_head: true,
+            },
+        ));
     }
 
     let mut walk = repo.revwalk()?;
@@ -258,7 +290,8 @@ pub fn wip_oid() -> Oid {
 fn working_tree_count(repo: &Repository) -> usize {
     let mut opts = StatusOptions::new();
     opts.include_untracked(true).recurse_untracked_dirs(true);
-    repo.statuses(Some(&mut opts)).map_or(0, |statuses| statuses.len())
+    repo.statuses(Some(&mut opts))
+        .map_or(0, |statuses| statuses.len())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -317,7 +350,9 @@ fn collect_files(diff: &git2::Diff<'_>, budget: &mut usize) -> Result<(Vec<FileD
     let mut files = Vec::new();
 
     for idx in 0..total.min(MAX_FILES) {
-        let Some(delta) = diff.get_delta(idx) else { continue };
+        let Some(delta) = diff.get_delta(idx) else {
+            continue;
+        };
         let path_of = |f: git2::DiffFile<'_>| f.path().map(|p| p.to_string_lossy().into_owned());
         let new_path = path_of(delta.new_file());
         let old_path = path_of(delta.old_file());
@@ -329,7 +364,11 @@ fn collect_files(diff: &git2::Diff<'_>, budget: &mut usize) -> Result<(Vec<FileD
             Delta::Typechange => 'T',
             _ => 'M',
         };
-        let shown = if status == 'D' { old_path.clone() } else { new_path.clone() };
+        let shown = if status == 'D' {
+            old_path.clone()
+        } else {
+            new_path.clone()
+        };
         let mut file = FileDiff {
             path: shown.unwrap_or_default(),
             old_path: (matches!(status, 'R' | 'C')).then_some(old_path).flatten(),
@@ -440,7 +479,10 @@ pub fn load_detail(path: &Path, oid: Oid) -> Result<CommitDetail> {
         author: author.name().unwrap_or("?").to_owned(),
         email: author.email().unwrap_or("").to_owned(),
         time: format_time(when.seconds() + i64::from(when.offset_minutes()) * 60),
-        parents: commit.parent_ids().map(|p| p.to_string()[..7].to_owned()).collect(),
+        parents: commit
+            .parent_ids()
+            .map(|p| p.to_string()[..7].to_owned())
+            .collect(),
         files,
         files_total,
         added,
@@ -601,12 +643,19 @@ pub fn sync(path: &Path) -> Result<String> {
     if run(path, &["rev-parse", "--abbrev-ref", "@{upstream}"]).is_err() {
         return Ok("Fetch done. The branch has no upstream, so there is nothing to pull.".into());
     }
-    let counts = run(path, &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"])?;
-    let mut parts = counts.split_whitespace().map(|n| n.parse::<usize>().unwrap_or(0));
+    let counts = run(
+        path,
+        &["rev-list", "--left-right", "--count", "HEAD...@{upstream}"],
+    )?;
+    let mut parts = counts
+        .split_whitespace()
+        .map(|n| n.parse::<usize>().unwrap_or(0));
     let (ahead, behind) = (parts.next().unwrap_or(0), parts.next().unwrap_or(0));
     match (ahead, behind) {
         (0, 0) => Ok("Already up to date.".into()),
-        (ahead, 0) => Ok(format!("Up to date. {ahead} local commits are not pushed yet.")),
+        (ahead, 0) => Ok(format!(
+            "Up to date. {ahead} local commits are not pushed yet."
+        )),
         (0, behind) => fast_forward(path, behind),
         (ahead, behind) => bail!(
             "Local (↑{ahead}) and remote (↓{behind}) have diverged, so nothing was merged.\n\
@@ -630,9 +679,14 @@ fn fast_forward(path: &Path, behind: usize) -> Result<String> {
 /// True when the worktree has ordinary uncommitted changes and no merge, rebase, cherry-pick
 /// or revert is in progress. Those in-progress operations must not be swept into a stash.
 fn can_set_aside_for_pull(path: &Path) -> bool {
-    if ["MERGE_HEAD", "REBASE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"]
-        .iter()
-        .any(|reference| run(path, &["rev-parse", "-q", "--verify", reference]).is_ok())
+    if [
+        "MERGE_HEAD",
+        "REBASE_HEAD",
+        "CHERRY_PICK_HEAD",
+        "REVERT_HEAD",
+    ]
+    .iter()
+    .any(|reference| run(path, &["rev-parse", "-q", "--verify", reference]).is_ok())
     {
         return false;
     }
@@ -694,7 +748,14 @@ fn remote_name(path: &Path) -> Option<String> {
     let remotes = run(path, &["remote"]).ok()?;
     let mut names = remotes.lines().map(str::trim).filter(|n| !n.is_empty());
     let first = names.next()?;
-    Some(if first == "origin" || names.any(|n| n == "origin") { "origin" } else { first }.to_owned())
+    Some(
+        if first == "origin" || names.any(|n| n == "origin") {
+            "origin"
+        } else {
+            first
+        }
+        .to_owned(),
+    )
 }
 
 /// Pushes the current branch, setting its upstream on the first push. `force` is for a rewritten
@@ -778,7 +839,10 @@ pub fn stash_push(path: &Path, message: &str) -> Result<String> {
     if message.is_empty() {
         run(path, &["stash", "push", "--include-untracked"])
     } else {
-        run(path, &["stash", "push", "--include-untracked", "-m", message])
+        run(
+            path,
+            &["stash", "push", "--include-untracked", "-m", message],
+        )
     }
 }
 
@@ -813,8 +877,12 @@ pub fn unique_commits(path: &Path, name: &str) -> Result<usize> {
     }
     for reference in repo.references()? {
         let reference = reference?;
-        let Ok(refname) = reference.name() else { continue };
-        let relevant = ["refs/heads/", "refs/remotes/", "refs/tags/"].iter().any(|p| refname.starts_with(p));
+        let Ok(refname) = reference.name() else {
+            continue;
+        };
+        let relevant = ["refs/heads/", "refs/remotes/", "refs/tags/"]
+            .iter()
+            .any(|p| refname.starts_with(p));
         if !relevant || refname == own {
             continue;
         }
@@ -838,7 +906,11 @@ fn format_time(secs: i64) -> String {
     let day = doy - (153 * mp + 2) / 5 + 1;
     let month = if mp < 10 { mp + 3 } else { mp - 9 };
     let year = yoe + era * 400 + i64::from(month <= 2);
-    format!("{year}-{month:02}-{day:02} {:02}:{:02}", rem / 3600, rem % 3600 / 60)
+    format!(
+        "{year}-{month:02}-{day:02} {:02}:{:02}",
+        rem / 3600,
+        rem % 3600 / 60
+    )
 }
 
 #[cfg(test)]
@@ -978,7 +1050,10 @@ mod tests {
         assert!(err.contains("diverged"), "{err}");
         let snap = load(&b).unwrap();
         assert!(!snap.merging);
-        assert_eq!(snap.commits.iter().filter(|c| c.parents.len() == 2).count(), 0);
+        assert_eq!(
+            snap.commits.iter().filter(|c| c.parents.len() == 2).count(),
+            0
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1003,9 +1078,15 @@ mod tests {
         let msg = sync(&b).unwrap();
         assert!(msg.contains("Pulled 1 new commits"), "{msg}");
         assert_eq!(fs::read_to_string(b.join("a.txt")).unwrap(), "1\nlocal\n");
-        assert_eq!(fs::read_to_string(b.join("note.txt")).unwrap(), "untracked\n");
+        assert_eq!(
+            fs::read_to_string(b.join("note.txt")).unwrap(),
+            "untracked\n"
+        );
         assert_eq!(fs::read_to_string(b.join("b.txt")).unwrap(), "remote\n");
-        assert!(load(&b).unwrap().stashes.is_empty(), "nothing needed to be stashed");
+        assert!(
+            load(&b).unwrap().stashes.is_empty(),
+            "nothing needed to be stashed"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1035,10 +1116,17 @@ mod tests {
             "remote\nmid\nlocal\n",
             "local and remote edits of the same file both survive"
         );
-        assert_eq!(fs::read_to_string(b.join("note.txt")).unwrap(), "untracked\n");
+        assert_eq!(
+            fs::read_to_string(b.join("note.txt")).unwrap(),
+            "untracked\n"
+        );
         let snap = load(&b).unwrap();
         assert_eq!(snap.stashes.len(), 1, "the temporary stash is gone");
-        assert!(snap.stashes[0].message.contains("keep me"), "{}", snap.stashes[0].message);
+        assert!(
+            snap.stashes[0].message.contains("keep me"),
+            "{}",
+            snap.stashes[0].message
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1059,12 +1147,20 @@ mod tests {
         let snap = load(&b).unwrap();
         assert_eq!(snap.stashes.len(), 1);
         assert!(
-            snap.stashes[0].message.contains("uncommitted changes during pull"),
+            snap.stashes[0]
+                .message
+                .contains("uncommitted changes during pull"),
             "{}",
             snap.stashes[0].message
         );
-        assert_eq!(fs::read_to_string(b.join("note.txt")).unwrap(), "from remote\n");
-        assert!(snap.commits.iter().any(|c| c.summary.contains("add note")), "the pull landed");
+        assert_eq!(
+            fs::read_to_string(b.join("note.txt")).unwrap(),
+            "from remote\n"
+        );
+        assert!(
+            snap.commits.iter().any(|c| c.summary.contains("add note")),
+            "the pull landed"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1079,8 +1175,15 @@ mod tests {
         let err = sync(&b).unwrap_err().to_string();
         assert!(err.contains("newest stash"), "{err}");
         let snap = load(&b).unwrap();
-        assert_eq!(snap.stashes.len(), 1, "a conflicting restore leaves the stash in place");
-        assert!(snap.commits.iter().any(|c| c.summary.contains("remote")), "the pull itself landed");
+        assert_eq!(
+            snap.stashes.len(),
+            1,
+            "a conflicting restore leaves the stash in place"
+        );
+        assert!(
+            snap.commits.iter().any(|c| c.summary.contains("remote")),
+            "the pull itself landed"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
@@ -1121,11 +1224,18 @@ mod tests {
 
         let snap = load(&dir).unwrap();
         let d = load_detail(&dir, snap.commits[0].oid).unwrap();
-        assert_eq!((d.summary.as_str(), d.body.as_str()), ("Title", "Long text"));
+        assert_eq!(
+            (d.summary.as_str(), d.body.as_str()),
+            ("Title", "Long text")
+        );
         assert_eq!(d.files.len(), 2);
         let a = d.files.iter().find(|f| f.path == "a.txt").unwrap();
         assert_eq!((a.status, a.added, a.removed), ('M', 1, 0));
-        assert!(a.lines.iter().any(|l| l.kind == LineKind::Add && l.text == "two"));
+        assert!(
+            a.lines
+                .iter()
+                .any(|l| l.kind == LineKind::Add && l.text == "two")
+        );
         let n = d.files.iter().find(|f| f.path == "new.txt").unwrap();
         assert_eq!(n.status, 'A');
 
@@ -1134,7 +1244,10 @@ mod tests {
         sh(&dir, &["commit", "-q", "-m", "binary"]);
         let snap = load(&dir).unwrap();
         let bin = load_detail(&dir, snap.commits[0].oid).unwrap();
-        assert!(bin.files[0].binary, "NUL bytes should be detected as binary");
+        assert!(
+            bin.files[0].binary,
+            "NUL bytes should be detected as binary"
+        );
         assert!(bin.files[0].lines.is_empty());
 
         // Root commit diffs against the empty tree.
@@ -1151,12 +1264,18 @@ mod tests {
 
         let missing = dir.join("nope");
         let err = load(&missing).unwrap_err();
-        assert!(err.downcast_ref::<NotARepo>().is_none(), "a missing folder is a plain error");
+        assert!(
+            err.downcast_ref::<NotARepo>().is_none(),
+            "a missing folder is a plain error"
+        );
 
         init(&dir).unwrap();
         let snap = load(&dir).unwrap();
         assert!(snap.commits.is_empty());
-        assert!(snap.head_branch.is_some(), "an unborn branch still has a name");
+        assert!(
+            snap.head_branch.is_some(),
+            "an unborn branch still has a name"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1165,7 +1284,10 @@ mod tests {
         let dir = scratch("wip");
         repo(&dir);
         let clean = load(&dir).unwrap();
-        assert!(clean.commits.iter().all(|c| !c.wip), "no WIP row while the tree is clean");
+        assert!(
+            clean.commits.iter().all(|c| !c.wip),
+            "no WIP row while the tree is clean"
+        );
 
         fs::write(dir.join("a.txt"), "1\nchanged\n").unwrap(); // unstaged edit
         fs::write(dir.join("staged.txt"), "s\n").unwrap();
@@ -1182,12 +1304,20 @@ mod tests {
         let d = load_detail(&dir, wip_oid()).unwrap();
         assert!(d.wip);
         let paths: Vec<_> = d.files.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(paths.len(), 3, "staged and unstaged changes share one list: {paths:?}");
+        assert_eq!(
+            paths.len(),
+            3,
+            "staged and unstaged changes share one list: {paths:?}"
+        );
         for expected in ["a.txt", "staged.txt", "untracked.txt"] {
             assert!(paths.contains(&expected), "{paths:?}");
         }
         let untracked = d.files.iter().find(|f| f.path == "untracked.txt").unwrap();
-        assert_eq!((untracked.status, untracked.added), ('A', 2), "untracked content is shown as added lines");
+        assert_eq!(
+            (untracked.status, untracked.added),
+            ('A', 2),
+            "untracked content is shown as added lines"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1211,17 +1341,33 @@ mod tests {
         fs::write(dir.join("new file *.txt"), "n\n").unwrap(); // spaces and a glob character
         fs::remove_file(dir.join("a.txt")).unwrap();
 
-        assert!(super::commit(&dir, "  \n", false).is_err(), "an empty message is refused");
+        assert!(
+            super::commit(&dir, "  \n", false).is_err(),
+            "an empty message is refused"
+        );
         super::commit(&dir, "Everything at once\n\nWith body", false).unwrap();
         let snap = load(&dir).unwrap();
-        assert!(snap.commits.iter().all(|c| !c.wip), "nothing is left behind");
+        assert!(
+            snap.commits.iter().all(|c| !c.wip),
+            "nothing is left behind"
+        );
         assert_eq!(snap.commits.len(), 2);
         let d = load_detail(&dir, snap.commits[0].oid).unwrap();
-        assert_eq!((d.summary.as_str(), d.body.as_str()), ("Everything at once", "With body"));
+        assert_eq!(
+            (d.summary.as_str(), d.body.as_str()),
+            ("Everything at once", "With body")
+        );
         let paths: Vec<_> = d.files.iter().map(|f| f.path.as_str()).collect();
-        assert_eq!(paths, ["a.txt", "new file *.txt"], "the deletion and the new file are both in");
+        assert_eq!(
+            paths,
+            ["a.txt", "new file *.txt"],
+            "the deletion and the new file are both in"
+        );
 
-        assert_eq!(head_message(&dir).unwrap(), "Everything at once\n\nWith body");
+        assert_eq!(
+            head_message(&dir).unwrap(),
+            "Everything at once\n\nWith body"
+        );
         fs::write(dir.join("later.txt"), "l\n").unwrap();
         super::commit(&dir, "New text", true).unwrap();
         let snap = load(&dir).unwrap();
@@ -1253,7 +1399,9 @@ mod tests {
         checkout(&dir, "main", false).unwrap();
         commit(&dir, "a.txt", "main\n");
         assert!(merge(&dir, "topic").is_err());
-        let err = super::commit(&dir, "Too early", false).unwrap_err().to_string();
+        let err = super::commit(&dir, "Too early", false)
+            .unwrap_err()
+            .to_string();
         assert!(err.contains("conflict") && err.contains("a.txt"), "{err}");
         assert!(load(&dir).unwrap().merging, "the merge is still open");
         fs::remove_dir_all(dir).unwrap();
@@ -1267,12 +1415,28 @@ mod tests {
         assert!(load(&a).unwrap().local[0].upstream);
 
         super::commit(&a, "Reworded", true).unwrap();
-        assert!(push(&a, false).is_err(), "a rewritten, already pushed commit is rejected");
+        assert!(
+            push(&a, false).is_err(),
+            "a rewritten, already pushed commit is rejected"
+        );
         push(&a, true).unwrap();
         sh(&b, &["fetch", "-q"]);
-        let remote_tip = Command::new("git").arg("-C").arg(&b).args(["rev-parse", "origin/main"]).output().unwrap();
-        let local_tip = Command::new("git").arg("-C").arg(&a).args(["rev-parse", "HEAD"]).output().unwrap();
-        assert_eq!(remote_tip.stdout, local_tip.stdout, "the remote has the amended commit");
+        let remote_tip = Command::new("git")
+            .arg("-C")
+            .arg(&b)
+            .args(["rev-parse", "origin/main"])
+            .output()
+            .unwrap();
+        let local_tip = Command::new("git")
+            .arg("-C")
+            .arg(&a)
+            .args(["rev-parse", "HEAD"])
+            .output()
+            .unwrap();
+        assert_eq!(
+            remote_tip.stdout, local_tip.stdout,
+            "the remote has the amended commit"
+        );
 
         let lonely = scratch("push-none");
         repo(&lonely);
@@ -1298,7 +1462,10 @@ mod tests {
         assert!(snap.commits.iter().all(|c| !c.wip), "the tree is clean");
         assert_eq!(fs::read_to_string(dir.join("a.txt")).unwrap(), "1\n");
         assert!(!dir.join("added.txt").exists() && !dir.join("folder").exists());
-        assert!(dir.join("ignored.log").exists(), "ignored files are not touched");
+        assert!(
+            dir.join("ignored.log").exists(),
+            "ignored files are not touched"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1337,13 +1504,26 @@ mod tests {
         fs::write(dir.join("added.txt"), "n\n").unwrap();
         stash_push(&dir, "My state").unwrap();
         let snap = load(&dir).unwrap();
-        assert!(snap.commits.iter().all(|c| !c.wip), "the tree is clean after stashing");
-        assert!(!dir.join("added.txt").exists(), "untracked files are stashed too");
+        assert!(
+            snap.commits.iter().all(|c| !c.wip),
+            "the tree is clean after stashing"
+        );
+        assert!(
+            !dir.join("added.txt").exists(),
+            "untracked files are stashed too"
+        );
         assert_eq!(snap.stashes.len(), 1);
-        assert!(snap.stashes[0].message.contains("My state"), "{}", snap.stashes[0].message);
+        assert!(
+            snap.stashes[0].message.contains("My state"),
+            "{}",
+            snap.stashes[0].message
+        );
 
         stash_pop(&dir, 0).unwrap();
-        assert!(load(&dir).unwrap().stashes.is_empty(), "pop removes the stash");
+        assert!(
+            load(&dir).unwrap().stashes.is_empty(),
+            "pop removes the stash"
+        );
         assert!(dir.join("added.txt").exists());
         sh(&dir, &["reset", "-q", "--hard"]);
         sh(&dir, &["clean", "-fdq"]);
@@ -1352,7 +1532,10 @@ mod tests {
         stash_drop(&dir, 0).unwrap();
         assert!(load(&dir).unwrap().stashes.is_empty());
         stash_push(&dir, "").unwrap(); // nothing to stash is no error for git
-        assert!(load(&dir).unwrap().stashes.is_empty(), "and it creates no empty stash");
+        assert!(
+            load(&dir).unwrap().stashes.is_empty(),
+            "and it creates no empty stash"
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 
@@ -1366,17 +1549,33 @@ mod tests {
         let snap = load(&dir).unwrap();
         assert_eq!(snap.head_branch.as_deref(), Some("feature"));
         let tip = snap.commits.iter().find(|c| !c.wip).unwrap().oid;
-        assert_eq!(snap.local.iter().find(|b| b.name == "feature").unwrap().tip, tip);
+        assert_eq!(
+            snap.local.iter().find(|b| b.name == "feature").unwrap().tip,
+            tip
+        );
         assert!(create_branch(&dir, "feature").is_err(), "the name is taken");
-        assert!(create_branch(&dir, "no good").is_err(), "not a valid branch name");
+        assert!(
+            create_branch(&dir, "no good").is_err(),
+            "not a valid branch name"
+        );
 
         commit(&dir, "f.txt", "f\n");
         checkout(&dir, "main", false).unwrap();
         assert_eq!(unique_commits(&dir, "feature").unwrap(), 1);
         merge(&dir, "feature").unwrap();
-        assert_eq!(unique_commits(&dir, "feature").unwrap(), 0, "merged branches lose nothing");
+        assert_eq!(
+            unique_commits(&dir, "feature").unwrap(),
+            0,
+            "merged branches lose nothing"
+        );
         delete_branch(&dir, "feature").unwrap();
-        assert!(load(&dir).unwrap().local.iter().all(|b| b.name != "feature"));
+        assert!(
+            load(&dir)
+                .unwrap()
+                .local
+                .iter()
+                .all(|b| b.name != "feature")
+        );
         fs::remove_dir_all(dir).unwrap();
     }
 }

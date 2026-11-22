@@ -51,7 +51,11 @@ pub fn layout(commits: &[Commit]) -> Graph {
             None => new_color(),
         };
 
-        let mut row = GraphRow { lane, color, ..GraphRow::default() };
+        let mut row = GraphRow {
+            lane,
+            color,
+            ..GraphRow::default()
+        };
         for (i, slot) in lanes.iter().enumerate() {
             let Some((oid, c)) = *slot else { continue };
             if oid == commit.oid {

@@ -1,6 +1,6 @@
 [package]
 name = "gitbro"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "A slim Git client built with and for Omarchy: see the graph, commit and push in one step"
 license = "0BSD"
@@ -15,7 +15,9 @@ git2 = "0.21.0"
 
 # Rune, pinned to a `dev` commit; the framework says `dev` is never rewritten.
 rune = { git = "https://github.com/anomalyco/rune", rev = "bca47138e9c31a7870a79272ee2523b592b1248d", features = ["native-file-dialog"] }
+rune-fx = { git = "https://github.com/anomalyco/rune", rev = "bca47138e9c31a7870a79272ee2523b592b1248d" }
 rune-kit = { git = "https://github.com/anomalyco/rune", rev = "bca47138e9c31a7870a79272ee2523b592b1248d" }
+wgpu = { version = "30", default-features = false }
 
 # Rune paints and lays out every frame; unoptimized it drops on a large graph.
 [profile.dev]
